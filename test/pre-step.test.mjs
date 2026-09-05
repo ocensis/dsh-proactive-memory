@@ -65,6 +65,19 @@ test('step 1 with nothing claimed is returned untouched and costs no model call 
   assert.deepEqual(kinds(ctx), [])
 })
 
+// Rule R1, case (a) again, the other way round: something WAS claimed, but an earlier pre-step
+// listener returned an empty decision. dsh-agent-loop:542-545 would still end the turn without a
+// request, so the plugin must not splice — the inbox claim alone is not proof that the step runs.
+test('step 1 with a claimed message but an emptied decision is returned untouched (rule R1)', async () => {
+  const ctx = makeCtx({ script: [textChunks(NOTE)] })
+  apply(ctx, ARM)
+  const base = { kind: 'enter', messages: [] }
+  const out = await runPreStep(ctx, { agent: fakeAgent(), messages: [userMsg('cancel order W1')], step: 1, decision: base })
+  assert.equal(out, base)
+  assert.equal(ctx.llmCalls, 0)
+  assert.deepEqual(kinds(ctx), [])
+})
+
 // Rule R1, case (b): a pre-step reached after the turn already ended. The previous reply had no
 // tool calls, so the session log ends with an assistant message and no tool result follows it;
 // dsh-agent-loop:541 breaks on an empty decision, and splicing would resurrect a finished turn.

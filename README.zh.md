@@ -172,7 +172,7 @@ turn"的位置，splice 都有同样的风险：`phase.step === 0` 时（`dsh-ag
 | 放过的情形 | 为什么 |
 | --- | --- |
 | `decision.kind === 'reject'` | loop 根本没有要进入一个 step。 |
-| 一个 turn 的第 1 步，且没从信箱里 claim 到任何消息 | `:542-545` 会不发请求就结束这个 turn，往里塞消息等于凭空造一次请求。 |
+| 一个 turn 的第 1 步，且 decision 为空（信箱里没 claim 到消息，或前面的 pre-step 监听器把这批消息清空了） | `:542-545` 会不发请求就结束这个 turn，往里塞消息等于凭空造一次请求。 |
 | turn 已经结束之后才走到的 pre-step —— 上一条回复没调工具，或者撞上了 max-tokens | 能走到这里只因为 `inbox.nextStep` 非空（steering、inject），而 `:541` 在 decision 为空时才 break；一 splice 就把一个已经结束的 turn 复活成第二条 assistant 消息。 |
 
 后两种在退出那行里计成 `guards`，不算 `skip` 事件：它们是一个 turn 的正常形状，不是异常。

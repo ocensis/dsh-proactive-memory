@@ -184,7 +184,7 @@ The plugin returns the decision **unchanged**, with no event and no consult, in 
 | guarded case | why |
 | --- | --- |
 | `decision.kind === 'reject'` | the loop is not entering a step at all. |
-| step 1 of a turn with nothing claimed from the inbox | `:542-545` completes the turn without a request; a spliced message would manufacture one. |
+| step 1 of a turn whose decision is empty (nothing claimed from the inbox, or an earlier pre-step listener emptied the batch) | `:542-545` completes the turn without a request; a spliced message would manufacture one. |
 | any pre-step reached after the turn already ended — the previous reply had no tool calls, or hit max-tokens | it is only reached because `inbox.nextStep` was non-empty (steering, inject), and `:541` breaks on an empty decision; a splice resurrects a finished turn into a second assistant message. |
 
 The last two are counted as `guards` in the teardown line, never as `skip` events: they are the

@@ -77,26 +77,33 @@ export function apply(ctx, config) {
     // own runtime-context message occupies.
     //
     // Two cases stay UNSAFE and are still guarded, both of them the R1 bug:
-    //   (a) step 1 of a turn with nothing claimed — :542-545 completes the turn without a request,
-    //       so a spliced message manufactures one.
+    //   (a) step 1 of a turn whose decision is empty — :542-545 completes the turn without a request,
+    //       so a spliced message manufactures one. "Empty" can come from an empty inbox claim or
+    //       from an earlier pre-step listener that emptied the batch; both are covered.
     //   (b) any pre-step reached after the turn already ended (the previous reply had no tool calls,
     //       or hit max-tokens). That only happens when inbox.nextStep was non-empty (steering,
     //       inject), and :541 breaks on an empty decision — a splice resurrects a finished turn and
     //       the user turn ends up with two assistant messages.
-    // The session log tells them apart: mid-turn ⇔ its last message is a tool result (role 'user',
+    // The session log tells mid-turn apart: its last message is a tool result (role 'user',
     // source.kind 'tool'). After a completed turn the last message is the assistant reply — with no
     // tool-call blocks, or with blocks that max-tokens cut before any result could follow. Either
     // way not a tool-result message, so the test correctly says "not mid-turn".
+    //
+    // So the step is known to run when EITHER we are mid-turn OR both the inbox claim and the
+    // decision are non-empty (then neither :541 nor :542-545 can fire). Anything else is returned
+    // untouched. This is deliberately a subset of "the loop would run it" — sound, not complete.
     if (decision.kind === 'reject') return decision
     const claimed = Array.isArray(messages) ? messages : []
     const derived = agent?.session?.deriveMessages?.() ?? []
     const last = derived.at?.(-1)
     const midTurn = step > 1 && !!last && last.role === 'user' && last.source?.kind === 'tool'
-    if (claimed.length === 0 && !midTurn) {
+    const decided = Array.isArray(decision.messages) ? decision.messages : null
+    const stepRuns = midTurn || (claimed.length > 0 && decided !== null && decided.length > 0)
+    if (!stepRuns) {
       stats.guards++ // counted, never an event: this is the common case, not an anomaly
       return decision
     }
-    if (!Array.isArray(decision.messages)) return decision
+    if (decided === null) return decision
 
     const sid = sidOf({ agent })
     const state = stateFor(sid)
