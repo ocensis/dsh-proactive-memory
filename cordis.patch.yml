@@ -1,0 +1,17 @@
+# What `dsh plugin add dsh-plugin-proactive-memory` applies to the profile.
+#
+# The memory model is deliberately NOT set here: leaving it empty makes the plugin fall back to the
+# executor's own default model and warn loudly, because silently sharing the executor model would
+# invalidate the experiment. Point it at a cheap model, e.g.
+#
+#   config:
+#     model: { provider: openrouter, model: deepseek/deepseek-v4-flash, maxTokens: 512, timeoutMs: 20000 }
+#
+# Arms: off (no listeners) | always (fixed reminder, zero model calls) | proactive | proactive-nobank | bankctx.
+# Insert it AFTER any tool-policy plugin (e.g. a write-confirmation gate) and BEFORE the transport
+# plugin that drives the loop.
+- insert:
+    - id: proactive-memory
+      name: dsh-plugin-proactive-memory
+      config:
+        mode: proactive

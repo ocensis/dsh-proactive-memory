@@ -1,0 +1,58 @@
+{
+  "name": "dsh-plugin-proactive-memory",
+  "version": "0.1.0",
+  "description": "A dsh plugin: a cheap memory model watches the agent step by step inside one task and splices at most one short reminder in front of the next model request. Ablation arms mirror the Proactive Memory paper (arXiv 2607.08716).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "prompts",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "demo": "node examples/headless/demo.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "agent",
+    "memory",
+    "proactive-memory",
+    "tau2-bench",
+    "llm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ocensis/dsh-plugin-proactive-memory"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-agent": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-llm": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-agent": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2",
+    "@deepseek-ai/cordis": "4.0.2"
+  }
+}
