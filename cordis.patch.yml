@@ -5,7 +5,14 @@
 # invalidate the experiment. Point it at a cheap model, e.g.
 #
 #   config:
-#     model: { provider: openrouter, model: deepseek/deepseek-v4-flash, maxTokens: 512, timeoutMs: 20000 }
+#     model: { provider: openrouter, model: deepseek/deepseek-v4-flash, maxTokens: 512, timeoutMs: 45000 }
+#
+# Two more worth setting for any real domain — without them the memory model has no rules to cite and
+# no memory of a lookup once it leaves the transcript window:
+#
+#   config:
+#     policyFile: /abs/path/to/policy.md          # its ONLY source of rules; absent = no procedural entries
+#     keyTools: [find_user_id_by_email]           # calls whose result is replayed for the whole episode
 #
 # Arms: off (no listeners) | always (fixed reminder, zero model calls) | proactive | proactive-nobank | bankctx.
 # Insert it AFTER any tool-policy plugin (e.g. a write-confirmation gate) and BEFORE the transport

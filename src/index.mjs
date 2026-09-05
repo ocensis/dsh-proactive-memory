@@ -9,9 +9,9 @@ import { applyEdits, createBank, renderBank } from './bank.mjs'
 import { Config, resolveConfig, scheduled } from './config.mjs'
 import { emit } from './events.mjs'
 import { buildReminder, clip, shouldInject, stripUnsafe } from './inject.mjs'
-import { consult } from './memory-agent.mjs'
+import { buildSystem, consult, readPolicy } from './memory-agent.mjs'
 import { appendTrace } from './trace.mjs'
-import { PLUGIN, buildWindow, middleTruncate } from './window.mjs'
+import { PLUGIN, buildWindow, formatKeyToolCall, middleTruncate } from './window.mjs'
 
 export const name = PLUGIN
 export const inject = ['llm']
@@ -21,10 +21,21 @@ const sidOf = x => String(x?.agent?.id ?? x?.agent?.session?.id ?? x?.id ?? 'unk
 
 /** Cap on the writes carried into one `<recent_writes>` section, oldest dropped first. */
 const MAX_RECENT_WRITES = 8
+/** Caps on the two episode-cumulative sections, oldest dropped first. */
+const MAX_EXECUTED_WRITES = 20
+const MAX_KEY_TOOL_CALLS = 20
+
+/** Trim an episode-cumulative list in place, dropping the oldest entries. */
+const capOldest = (list, max) => { if (list.length > max) list.splice(0, list.length - max) }
 
 export function apply(ctx, config) {
   const cfg = resolveConfig(config)
   if (cfg.mode === 'off') return // registers nothing at all: zero listeners, zero cost
+
+  // Read once, here: the policy is a run constant, so it belongs in the system prompt (one shared
+  // prefix, cacheable) rather than in the per-step user message. An unreadable path warns loudly and
+  // leaves the policy empty — the prompt then forbids procedural entries outright.
+  const policyText = readPolicy(cfg)
 
   const states = new Map() // String(agent.id) -> episode state. Never module-level: 4 sessions share a process.
   const stats = { consults: 0, injects: 0, skips: 0, errors: 0, guards: 0 }
@@ -49,7 +60,12 @@ export function apply(ctx, config) {
   function stateFor(sid) {
     let s = states.get(sid)
     if (!s) {
-      s = { bank: createBank(), counted: 0, calls: 0, injected: [], lastBankRender: '', recentWrites: [], toolErrors: 0, turn: 0 }
+      s = {
+        bank: createBank(), counted: 0, calls: 0, injected: [], lastBankRender: '', turn: 0, toolErrors: 0,
+        recentWrites: [], // consumed by each consult: the writes since the previous one
+        executedWrites: [], // cumulative for the episode
+        keyToolCalls: [], // cumulative for the episode, recorded from tools/result
+      }
       states.set(sid, s)
     }
     return s
@@ -142,10 +158,29 @@ export function apply(ctx, config) {
       state.calls++
       let out
       try {
-        out = await consult(ctx, cfg, state, { ...win, step, route, sessionId: agent?.session?.id, recentWrites }, signal)
+        out = await consult(ctx, cfg, state, {
+          ...win,
+          step,
+          route,
+          sessionId: agent?.session?.id,
+          recentWrites,
+          executedWrites: [...state.executedWrites],
+          keyToolCalls: [...state.keyToolCalls],
+          policyText,
+        }, signal)
       } catch (error) {
         stats.errors++
-        log('error', { ...at, message: String(error?.message ?? error), code: error?.name ?? 'Error' })
+        const code = error?.name ?? 'Error'
+        const message = String(error?.message ?? error)
+        log('error', { ...at, message, code })
+        // The trace has to carry failures too, or a run's JSONL silently under-reports: a timeout
+        // (the pilot's 12/1447) looked exactly like a step where the plugin was never consulted.
+        // `consult` attaches the prompts it had already built to the error.
+        const carried = error?.consult
+        void appendTrace(cfg.trace.dir, sid, {
+          turn, step, ms: carried?.ms ?? null, code, message,
+          system: carried?.system ?? null, user: carried?.user ?? null,
+        })
         return decision
       }
       stats.consults++
@@ -205,7 +240,9 @@ export function apply(ctx, config) {
       }
     }
 
-    const text = buildReminder(note, cfg)
+    // bankctx injects a whole rendered bank, so it gets its own (much larger) budget: on the note
+    // budget the render was cut mid-entry and the rules section never arrived at all.
+    const text = buildReminder(note, cfg, cfg.mode === 'bankctx' ? cfg.bankctx.maxChars : cfg.intervention.maxChars)
     const reminder = createUserMessage({
       content: [{ type: 'text', text }],
       source: { kind: 'plugin', plugin: PLUGIN, form: 'recall' },
@@ -253,9 +290,12 @@ export function apply(ctx, config) {
     try {
       const state = states.get(sidOf(exec))
       if (state && cfg.writeTools.includes(exec.name)) {
-        state.recentWrites.push(`${exec.name} ${middleTruncate(JSON.stringify(exec.arguments ?? {}), cfg.window.argChars)}`)
+        const line = `${exec.name} ${middleTruncate(JSON.stringify(exec.arguments ?? {}), cfg.window.argChars)}`
+        state.recentWrites.push(line)
+        state.executedWrites.push(line)
         // Bounded: a consult that never happens (schedule, max-calls) must not grow this forever.
-        if (state.recentWrites.length > MAX_RECENT_WRITES) state.recentWrites.splice(0, state.recentWrites.length - MAX_RECENT_WRITES)
+        capOldest(state.recentWrites, MAX_RECENT_WRITES)
+        capOldest(state.executedWrites, MAX_EXECUTED_WRITES)
       }
     } catch { /* observation only */ }
     return next()
@@ -264,7 +304,19 @@ export function apply(ctx, config) {
   ctx.on('tools/result', (exec, result) => {
     try {
       const state = states.get(sidOf(exec))
-      if (state && result?.isError) state.toolErrors++
+      if (!state) return
+      if (result?.isError) state.toolErrors++
+      // A key tool's call and result are kept for the whole episode. The result is what makes the
+      // line worth anything: a lookup that returned an identifier settles that question for good,
+      // however far the exchange has since scrolled out of the transcript window.
+      if (cfg.keyTools.includes(exec.name)) {
+        const text = (Array.isArray(result?.content) ? result.content : [])
+          .filter(b => b?.type === 'text').map(b => b.text ?? '').join('\n')
+        state.keyToolCalls.push(formatKeyToolCall({
+          name: exec.name, args: exec.arguments, result: text, isError: Boolean(result?.isError),
+        }))
+        capOldest(state.keyToolCalls, MAX_KEY_TOOL_CALLS)
+      }
     } catch { /* observation only */ }
   })
 
@@ -282,9 +334,13 @@ export function apply(ctx, config) {
   if (cfg.mode === 'always') banner = '(none)'
   console.log(
     `[proactive-memory] mode=${cfg.mode} protocol=${cfg.protocol} model=${banner} every=${cfg.schedule.everySteps} ` +
-      `window=${cfg.window.messages} trace=${cfg.trace.dir || 'off'}`,
+      `window=${cfg.window.messages} policy=${policyText ? `${cfg.policyFile} (${policyText.length}c)` : 'none'} ` +
+      `keyTools=${cfg.keyTools.join(',') || 'none'} trace=${cfg.trace.dir || 'off'}`,
   )
 }
 
 // Re-exported so hosts and tests can reach the pieces without importing deep paths.
-export { applyEdits, buildReminder, buildWindow, clip, consult, createBank, renderBank, resolveConfig, scheduled, shouldInject, stripUnsafe }
+export {
+  applyEdits, buildReminder, buildSystem, buildWindow, clip, consult, createBank, formatKeyToolCall,
+  readPolicy, renderBank, resolveConfig, scheduled, shouldInject, stripUnsafe,
+}

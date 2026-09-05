@@ -57,7 +57,20 @@ test('renderBank is empty for an empty bank and deterministic otherwise', () => 
     { op: 'update_status', content: 'mid-refund' },
     { op: 'save_knowledge', id: 'k1', content: 'order #W1 delivered' },
   ], LIMITS)
-  assert.equal(renderBank(bank), 'Status: mid-refund\nKnown facts:\n- [k1] order #W1 delivered\nRules to follow: (none)')
-  assert.equal(renderBank(bank, { ids: false }), 'Status: mid-refund\nKnown facts:\n- order #W1 delivered\nRules to follow: (none)')
+  assert.equal(renderBank(bank), 'Rules to follow: (none)\nKnown facts:\n- [k1] order #W1 delivered\nStatus: mid-refund')
+  assert.equal(renderBank(bank, { ids: false }), 'Rules to follow: (none)\nKnown facts:\n- order #W1 delivered\nStatus: mid-refund')
   assert.equal(renderBank(bank), renderBank(bank))
+})
+
+// mode: bankctx injects this render and clips it to fit. With status first, 204 of the pilot's 335
+// injections were cut before "Rules to follow" ever appeared — the arm shipped status summaries.
+test('rules come first, so a clipped render keeps the part the executor can act on', () => {
+  const bank = createBank()
+  applyEdits(bank, [
+    { op: 'update_status', content: 'x'.repeat(200) },
+    { op: 'save_knowledge', id: 'k1', content: 'y'.repeat(200) },
+    { op: 'save_procedural', id: 'p1', content: 'List the action details and get an explicit yes before any write.' },
+  ], LIMITS)
+  const head = renderBank(bank, { ids: false }).slice(0, 120)
+  assert.ok(head.includes('List the action details and get an explicit yes'), head)
 })

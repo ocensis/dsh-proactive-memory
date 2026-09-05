@@ -28,7 +28,9 @@ write-confirmation gate and **before** the bridge plugin that drives the loop:
           model: !!js process.env.PM_MODEL || 'deepseek/deepseek-v4-flash'
           temperature: 0
           maxTokens: 512
-          timeoutMs: 20000
+          # 45 s, not the package default of 20 s: the provider's latency tail, not the model,
+          # accounted for every timeout in the pilot (p99 ~14.5 s, max 19.4 s, none near maxTokens).
+          timeoutMs: 45000
         protocol: !!js process.env.PM_PROTOCOL || 'text'
         schedule:
           firstStep: true
@@ -36,7 +38,11 @@ write-confirmation gate and **before** the bridge plugin that drives the loop:
           maxCallsPerEpisode: 40
         # leave undefined to keep the plugin's own default (schemastery only fills undefined)
         alwaysText: !!js process.env.PM_ALWAYS_TEXT || undefined
+        policyFile: !!js process.env.PM_POLICY_FILE || ''
+        keyTools: !!js (process.env.PM_KEY_TOOLS || '').split(',').filter(Boolean)
         writeTools: !!js (process.env.PM_WRITE_TOOLS || '').split(',').filter(Boolean)
+        bankctx:
+          maxChars: 1500
         trace:
           dir: !!js process.env.PM_TRACE_DIR || ''
           console: true
@@ -85,6 +91,8 @@ cd ../dsh-proactive-memory && npm install && cd -    # once
 | `--memory-model <id>` | `deepseek/deepseek-v4-flash` | `PM_MODEL` | Memory model id. The provider is pinned to `openrouter` via `PM_PROVIDER`. |
 | `--memory-protocol <p>` | `text` | `PM_PROTOCOL` | `text` or `tools`. |
 | `--memory-interval <n>` | `1` | `PM_EVERY` | Consult every n-th counted step. A counted step is one **model request**, mid-turn steps after a tool result included — a turn whose reply calls three tools is four steps — so `1` means one consult per executor call, not one per user turn. `2` halves the memory bill. |
+| — | — | `PM_POLICY_FILE` | The domain policy the memory model is judged against, rendered into its system prompt. `run_eval.sh` defaults it to `<export dir>/policy.md` for a non-`off` arm — the same directory `tools.json` is exported to. Unset or unreadable means no `<policy>` section, and the prompt then forbids `procedural` entries and policy-violation interventions outright. |
+| — | — | `PM_KEY_TOOLS` | Comma list of the lookups whose call and result stay visible all episode as `<key_tool_calls>`. `run_eval.sh` defaults it per domain (retail: `find_user_id_by_email,find_user_id_by_name_zip`; `banking_knowledge`: empty). |
 | — | — | `PM_WRITE_TOOLS` | The domain's gate tools, so the gate and the memory plugin share one definition of "a write". `run_eval.sh` computes it with `tau2_env.gate_tools()` for a non-`off` arm unless it is already set in the environment; an explicit empty value means `<recent_writes>` reads `unknown`. |
 | — | — | `PM_TRACE_DIR` | Set automatically for a non-`off` arm: `data/memory-trace/<--save-to>`, or a bare timestamp when `--save-to` is omitted. |
 | — | — | `PM_ALWAYS_TEXT` | Overrides the fixed reminder of `mode: always`. |
@@ -146,9 +154,16 @@ the mechanism, and are not results:
   executed call with its full arguments — e.g. `exchange_delivered_order_items {"item_ids":[…],
   "order_id":"#W2378156", …}` — and read `(none)`, not `unknown`, on every other consult. `unknown`
   everywhere means the env var never reached the plugin.
+- **`<policy>` and `<key_tool_calls>` reach the model.** Open one trace line: `system` must carry a
+  `<policy>` section (otherwise `PM_POLICY_FILE` never arrived, and the arm silently becomes the one
+  that writes no `procedural` entries), and any consult after the authentication lookup must carry
+  `<key_tool_calls>` with the returned user id. The 40-task pilot ran without either: 31 of its 40
+  injected notes demanded a verification step the retail policy does not have, and 42 of 48
+  `procedural` entries were invented rules.
 - **Fail-open works.** One consult of 20 hit the 20 s deadline (`TimeoutError`); it was counted as
   `mem_errors`, the step proceeded with no note, and the episode still scored 1.0. Consult latency
-  was mean 4.4 s / p95 10.6 s.
+  was mean 4.4 s / p95 10.6 s. A timed-out consult now also writes an error row, so the JSONL line
+  count equals the consult count — in the pilot, 12 of 1447 consults left no line at all.
 - **Memory cost is not a rounding error at `every=1`.** Two episodes: memory $0.0031 against
   executor $0.0049 — about 63% of the executor's bill, despite a far cheaper model, because every
   consult re-sends a transcript window. `--memory-interval 2` is the first lever.

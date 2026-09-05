@@ -58,6 +58,11 @@ export function applyEdits(bank, edits, limits) {
 /**
  * Deterministic plain-text rendering. Returns '' for a completely empty bank so that
  * `mode: bankctx` has nothing to inject before the model has learned anything.
+ *
+ * Order is rules → facts → status, most actionable first. `mode: bankctx` injects this whole
+ * render and it is clipped to fit (`bankctx.maxChars`): with status first, a bank that outgrew the
+ * budget lost exactly the rules, which are the part the executor could have acted on.
+ *
  * @param opts.ids - keep the `[k1]` prefixes (the memory model needs them to overwrite/delete;
  *   the executor agent does not).
  */
@@ -69,8 +74,8 @@ export function renderBank(bank, { ids = true } = {}) {
   const line = e => `- ${ids ? `[${e.id}] ` : ''}${e.content}`
   const section = (label, list) => (list.length === 0 ? `${label}: (none)` : `${label}:\n${list.map(line).join('\n')}`)
   return [
-    `Status: ${bank.status || '(none)'}`,
-    section('Known facts', k),
     section('Rules to follow', p),
+    section('Known facts', k),
+    `Status: ${bank.status || '(none)'}`,
   ].join('\n')
 }

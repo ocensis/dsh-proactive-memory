@@ -42,9 +42,13 @@ export function clip(text, max) {
  */
 export const escapeFrameBody = body => String(body ?? '').replaceAll(CLOSE, '<\\/system-reminder>')
 
-/** Wrap a note in the reminder frame the executor sees. */
-export function buildReminder(note, cfg) {
-  const body = escapeFrameBody(clip(stripUnsafe(note), cfg.intervention.maxChars))
+/**
+ * Wrap a note in the reminder frame the executor sees.
+ * @param maxChars - clip budget; defaults to the note budget. `mode: bankctx` passes its own
+ *   (`bankctx.maxChars`), because what it injects is a whole rendered bank, not a one-line note.
+ */
+export function buildReminder(note, cfg, maxChars = cfg.intervention.maxChars) {
+  const body = escapeFrameBody(clip(stripUnsafe(note), maxChars))
   return [
     OPEN,
     'Proactive memory note from an automated observer. The user did not write this and cannot see it.',
@@ -56,17 +60,48 @@ export function buildReminder(note, cfg) {
   ].join('\n')
 }
 
-const tokens = s =>
-  new Set(
-    String(s ?? '')
-      .toLowerCase()
-      .replace(/([㐀-鿿぀-ヿ])/gu, ' $1 ') // CJK has no spaces: one token per character
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-      .split(/\s+/)
-      .filter(Boolean),
-  )
+// Function words carry no content, so leaving them in made two notes look alike merely for being
+// English. Negations are deliberately NOT here: "confirm the total" and "do not confirm the total"
+// must not normalize to the same bag.
+const STOPWORDS = new Set(
+  ('a an the this that these those and or but if then so as of to in on at by for with from into onto about'
+    + ' is are was were be been being am do does did doing have has had having it its they them their he she'
+    + ' his her you your yours i me my we our us there here when where which who whom what how than too very'
+    + ' can could will would shall should may might must just now still yet also only own same such each any'
+    + ' both all some more most other another again further once before after above below over under up down'
+    + ' out off while during until because since').split(' '),
+)
 
-/** Jaccard similarity over normalized tokens; 1 when both sides are empty. */
+// Crude, deliberately: enough to fold "verify/verifying", "order/orders", "confirmed/confirm", not a
+// real stemmer. Longest suffix first, and never down to a stub — "ties" must not become "t".
+const SUFFIXES = ['tion', 'ing', 'ed', 'es', 'ly', 's']
+const stem = w => {
+  if (w.length <= 4) return w
+  for (const suffix of SUFFIXES) {
+    if (w.endsWith(suffix) && w.length - suffix.length >= 3) return w.slice(0, -suffix.length)
+  }
+  return w
+}
+
+/**
+ * The bag two notes are compared on: lowercased, punctuation stripped, stopwords dropped, crude
+ * suffix stemming. CJK keeps one token per character and is never stemmed (the suffix list is
+ * English; `stem` only fires at length > 4, and a single CJK char never reaches it).
+ */
+const tokens = s => {
+  const bag = new Set()
+  for (const word of String(s ?? '')
+    .toLowerCase()
+    .replace(/([㐀-鿿぀-ヿ])/gu, ' $1 ') // CJK has no spaces: one token per character
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)) {
+    if (!word || STOPWORDS.has(word)) continue
+    bag.add(stem(word))
+  }
+  return bag
+}
+
+/** Jaccard similarity over the normalized bag; 1 when both sides are empty. */
 export function jaccard(a, b) {
   const A = tokens(a)
   const B = tokens(b)

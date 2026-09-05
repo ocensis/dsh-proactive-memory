@@ -15,6 +15,25 @@ export function middleTruncate(s, max) {
   return `${text.slice(0, head)}…[${text.length - max} chars cut]…${text.slice(text.length - tail)}`
 }
 
+/** `<key_tool_calls>` budgets. Fixed, not configurable: one short line per call is the whole point. */
+export const KEY_TOOL_ARG_CHARS = 300
+export const KEY_TOOL_RESULT_CHARS = 200
+
+const oneLine = s => String(s ?? '').replace(/\s+/g, ' ').trim()
+
+/**
+ * One `<key_tool_calls>` line: `name(args) -> result` and `[error]` when the call failed.
+ *
+ * These are recorded from `tools/result` and replayed for the whole episode, so the memory model
+ * still sees that a lookup returned an id long after that exchange scrolled out of the transcript
+ * window — the gap that had it demanding authentication the agent had already done.
+ */
+export function formatKeyToolCall({ name, args, result, isError }) {
+  const argText = middleTruncate(oneLine(typeof args === 'string' ? args : JSON.stringify(args ?? {})), KEY_TOOL_ARG_CHARS)
+  const resultText = middleTruncate(oneLine(result), KEY_TOOL_RESULT_CHARS) || '(no text)'
+  return `${name}(${argText}) -> ${resultText}${isError ? ' [error]' : ''}`
+}
+
 const blocks = m => (Array.isArray(m?.content) ? m.content : [])
 const textOf = m => blocks(m).filter(b => b?.type === 'text').map(b => b.text ?? '').join('\n').trim()
 

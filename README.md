@@ -13,14 +13,17 @@ one short reminder into the executor's context. The executor's prompt, tools and
 user message ──► dsh turn loop
                    │  for every model step (turn start, and after each tool result):
                    ├─ agent/pre-step ──► proactive-memory
-                   │                      1. window  = last 8 logged messages (+ what this step claimed)
+                   │                      1. inputs  = last 8 logged messages (+ what this step claimed)
+                   │                                   + this episode's key tool calls and writes, window or not
                    │                      2. consult = memory model (ctx.llm.stream, e.g. deepseek-v4-flash)
+                   │                           system prompt: the domain <policy>, its only source of rules
                    │                           phase 1: edit its private bank {status, knowledge[], procedural[]}
                    │                           phase 2: <no_intervention/> | <context_for_action>note</context_for_action>
                    │                      3. splice one <system-reminder> user message before the request
                    │                           (or nothing; any failure ⇒ the step proceeds unchanged)
                    ├─ model request (executor)
                    ├─ tools/pre-execute ──► proactive-memory observes write calls (never denies)
+                   ├─ tools/result ─────► proactive-memory keeps each keyTools call with its result
                    └─ tool results ──► next step
                  agent/disposed ──► bank dropped (no cross-episode state)
                  proactive-memory/event ──► host collects consults / injects / skips / errors
@@ -51,7 +54,7 @@ Source layout: `src/index.mjs` (listeners, the only stateful module), `config.mj
 ```bash
 git clone https://github.com/ocensis/dsh-proactive-memory.git
 cd dsh-proactive-memory && npm install   # its own node_modules: Node resolves the plugin's imports from here
-npm test       # 65 offline tests, no API key
+npm test       # 86 offline tests, no API key
 npm run demo   # a scripted episode: consults, bank edits, the injected reminder, events
 ```
 
@@ -65,6 +68,8 @@ before the plugin that drives the loop:
       config:
         mode: proactive
         model: { provider: openrouter, model: deepseek/deepseek-v4-flash }
+        policyFile: /abs/path/to/policy.md                                   # the ONLY source of rules the memory model gets
+        keyTools: [find_user_id_by_email, find_user_id_by_name_zip]          # calls whose result outlives the window
         writeTools: [cancel_pending_order, exchange_delivered_order_items]   # what counts as a write
         trace: { dir: ./memory-trace }                                       # one JSONL line per consult
 ```

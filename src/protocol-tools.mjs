@@ -14,10 +14,12 @@ const schema = (name, description, properties, required) => ({
 export const MEMORY_TOOLS = [
   schema('memory_update_status', 'Replace the one-sentence status of where the task stands and what remains.',
     { status: str('One sentence.') }, ['status']),
-  schema('memory_save_knowledge', 'Save or overwrite one fact that is costly to re-derive (ids, amounts, what the user ruled out, what is already verified).',
-    { id: str('Short stable id, e.g. "k3". Reusing an id overwrites it.'), content: str('The fact.') }, ['id', 'content']),
-  schema('memory_save_procedural', 'Save or overwrite one domain rule the agent has broken or is about to break, written as an instruction.',
-    { id: str('Short stable id, e.g. "p1". Reusing an id overwrites it.'), content: str('The rule, phrased as an instruction.') }, ['id', 'content']),
+  schema('memory_save_knowledge', 'Save or overwrite one fact that is costly to re-derive (ids, amounts, what the user ruled out, what has already been done). Quote it from a tool result or a user message; do not save an inference.',
+    { id: str('Short stable id, e.g. "k3". Reusing an id overwrites it.'), content: str('The fact, quoted from a tool result or a user message.') }, ['id', 'content']),
+  // Same wording as PHASE 1 of the prompt, and for the same reason: with no <policy> to quote from,
+  // a memory model asked for "a domain rule" invents one, and the invented rule gets obeyed.
+  schema('memory_save_procedural', 'Save or overwrite one rule QUOTED FROM the <policy> section of your system prompt that the agent has broken or is about to break, written as an instruction. If your system prompt has no <policy> section, never call this tool.',
+    { id: str('Short stable id, e.g. "p1". Reusing an id overwrites it.'), content: str('The rule, quoted from <policy>, phrased as an instruction.') }, ['id', 'content']),
   schema('memory_delete', 'Delete one bank entry that newer evidence contradicts.',
     { id: str('The id to delete.') }, ['id']),
 ]

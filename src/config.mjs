@@ -45,10 +45,18 @@ export const Config = z.object({
     maxPerEpisode: z.number().default(12),
     dedupeJaccard: z.number().default(0.8),
   }),
+  // `bankctx` injects the whole rendered bank, not a one-line note, so it cannot share the note
+  // budget: at 400 chars the render was cut mid-entry and the rules — the last section — never
+  // arrived at all. Its own budget, and rules first (see renderBank).
+  bankctx: z.object({
+    maxChars: z.number().default(1500).description('clip budget for the rendered bank in mode: bankctx'),
+  }),
   alwaysText: z.string().default(DEFAULT_ALWAYS_TEXT),
   locale: z.union(LOCALES).default('en'),
   promptFile: z.string().default('').description('absolute path overriding prompts/memory.<locale>.md'),
+  policyFile: z.string().default('').description('absolute path to the domain policy; rendered into the memory model system prompt'),
   writeTools: z.array(z.string()).default([]).description('tool names that count as "about to write"'),
+  keyTools: z.array(z.string()).default([]).description('tool names whose calls and results are kept for the whole episode'),
   trace: z.object({
     dir: z.string().default('').description('empty disables the JSONL trace'),
     console: z.boolean().default(true),
@@ -84,6 +92,7 @@ export function resolveConfig(raw) {
   cfg.intervention.maxChars = clampInt(cfg.intervention.maxChars, 20, 20000, 400)
   cfg.intervention.maxPerEpisode = clampInt(cfg.intervention.maxPerEpisode, 0, 1000, 12)
   cfg.intervention.dedupeJaccard = clampNum(cfg.intervention.dedupeJaccard, 0, 1, 0.8)
+  cfg.bankctx.maxChars = clampInt(cfg.bankctx.maxChars, 20, 20000, 1500)
   return cfg
 }
 

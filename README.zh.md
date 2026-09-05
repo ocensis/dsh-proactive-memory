@@ -12,14 +12,17 @@ agent，在每个模型步之前决定要不要往执行模型的上下文里塞
 用户消息 ──► dsh turn 循环
               │  每个模型步（turn 开头，以及每次工具结果回来之后）：
               ├─ agent/pre-step ──► proactive-memory
-              │                      1. 窗口   = 日志里最近 8 条消息（加上这一步刚 claim 到的）
+              │                      1. 输入   = 日志里最近 8 条消息（加上这一步刚 claim 到的）
+              │                                 + 这一集的关键工具调用和写操作，不受窗口限制
               │                      2. 咨询   = 记忆模型（ctx.llm.stream，例如 deepseek-v4-flash）
+              │                           系统提示里带着领域 <policy>，那是它唯一的规则来源
               │                           阶段 1：改自己的私有库 {status, knowledge[], procedural[]}
               │                           阶段 2：<no_intervention/> 或 <context_for_action>提醒</context_for_action>
               │                      3. 在请求前 splice 一条 <system-reminder> 用户消息
               │                           （或者什么都不做；任何失败 ⇒ 这一步原样进行）
               ├─ 执行模型请求
               ├─ tools/pre-execute ──► proactive-memory 只观察写调用（从不 deny）
+              ├─ tools/result ─────► proactive-memory 记下每个 keyTools 调用和它的结果
               └─ 工具结果 ──► 下一步
             agent/disposed ──► 记忆库丢弃（没有跨 episode 状态）
             proactive-memory/event ──► 宿主收集 consult / inject / skip / error
@@ -48,7 +51,7 @@ agent，在每个模型步之前决定要不要往执行模型的上下文里塞
 ```bash
 git clone https://github.com/ocensis/dsh-proactive-memory.git
 cd dsh-proactive-memory && npm install   # 要有自己的 node_modules：Node 从插件的真实目录解析它的 import
-npm test       # 65 个离线单测，不用 key
+npm test       # 86 个离线单测，不用 key
 npm run demo   # 一段脚本化的 episode：咨询、库编辑、注入的提醒、事件
 ```
 
@@ -61,6 +64,8 @@ npm run demo   # 一段脚本化的 episode：咨询、库编辑、注入的提�
       config:
         mode: proactive
         model: { provider: openrouter, model: deepseek/deepseek-v4-flash }
+        policyFile: /abs/path/to/policy.md                                   # 记忆模型唯一的规则来源
+        keyTools: [find_user_id_by_email, find_user_id_by_name_zip]          # 结果要跨窗口一直留着的调用
         writeTools: [cancel_pending_order, exchange_delivered_order_items]   # 哪些工具算"写"
         trace: { dir: ./memory-trace }                                       # 每次咨询一行 JSONL
 ```

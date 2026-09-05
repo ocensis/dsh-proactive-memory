@@ -118,6 +118,17 @@ test('tools protocol: unparsable arguments are reported, not thrown', async () =
   assert.deepEqual(MEMORY_TOOLS.map(t => t.name).sort(), ['memory_delete', 'memory_save_knowledge', 'memory_save_procedural', 'memory_update_status'])
 })
 
+// The tool schemas are the tools-protocol arm's whole PHASE 1 instruction, so they carry the same
+// rule the prompt does: procedural entries are quoted from <policy> or not written at all.
+test('tools protocol: the schemas say where a procedural rule may come from', () => {
+  const byName = Object.fromEntries(MEMORY_TOOLS.map(t => [t.name, t]))
+  const procedural = byName.memory_save_procedural
+  assert.match(procedural.description, /QUOTED FROM the <policy> section/)
+  assert.match(procedural.description, /no <policy> section, never call this tool/)
+  assert.match(procedural.parameters.properties.content.description, /quoted from <policy>/)
+  assert.match(byName.memory_save_knowledge.description, /Quote it from a tool result or a user message/)
+})
+
 test('tools protocol: gives up after maxRounds without inventing a decision', async () => {
   let n = 0
   const streamOnce = async () => ({
