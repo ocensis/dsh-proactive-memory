@@ -46,8 +46,8 @@ write-confirmation gate and **before** the bridge plugin that drives the loop:
 ```
 
 Order matters twice. The gate must come **first**: this plugin's `tools/pre-execute` listener only
-observes, and a call the gate denies should not be recorded as "about to act" — it is already a tool
-result in the transcript. And `PM_MODE` unset or `off` disables the whole row, so the module is never
+observes, and a call the gate denies never executed, so it does not belong in `<recent_writes>` — it
+is already a tool result in the transcript. And `PM_MODE` unset or `off` disables the whole row, so the module is never
 loaded, the plugin repo need not even exist, and runs that predate it still reproduce byte for byte.
 
 One more harness-side detail, easy to miss and expensive to debug: a gate that looks for the last
@@ -85,7 +85,7 @@ cd ../dsh-plugin-proactive-memory && npm install && cd -    # once
 | `--memory-model <id>` | `deepseek/deepseek-v4-flash` | `PM_MODEL` | Memory model id. The provider is pinned to `openrouter` via `PM_PROVIDER`. |
 | `--memory-protocol <p>` | `text` | `PM_PROTOCOL` | `text` or `tools`. |
 | `--memory-interval <n>` | `1` | `PM_EVERY` | Consult every n-th counted step. |
-| — | — | `PM_WRITE_TOOLS` | Set from `CONFIRM_GATE_TOOLS`, so the gate and the memory plugin share one definition of "a write". Unset means `<about_to_act>` reads `unknown`. |
+| — | — | `PM_WRITE_TOOLS` | The domain's gate tools, so the gate and the memory plugin share one definition of "a write". `run_eval.sh` computes it with `tau2_env.gate_tools()` for a non-`off` arm unless it is already set in the environment; an explicit empty value means `<recent_writes>` reads `unknown`. |
 | — | — | `PM_TRACE_DIR` | Set automatically for a non-`off` arm: `data/memory-trace/<--save-to>`, or a bare timestamp when `--save-to` is omitted. |
 | — | — | `PM_ALWAYS_TEXT` | Overrides the fixed reminder of `mode: always`. |
 

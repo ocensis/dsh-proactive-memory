@@ -70,7 +70,7 @@ dsh plugin add dsh-plugin-proactive-memory
 | `mode` | memory-model calls | what it does | paper ablation |
 | --- | --- | --- | --- |
 | `off` | 0 | registers no listeners at all | baseline |
-| `always` | 0 | one fixed reminder (`alwaysText`) on every scheduled step | always-inject (61.5) |
+| `always` | 0 | one fixed reminder (`alwaysText`) before every scheduled model step | always-inject (61.5) |
 | `proactive` | 1 / scheduled step | full mechanism: maintain the bank, then decide | full agent (61.2) |
 | `proactive-nobank` | 1 / scheduled step | decide only; no bank is built or sent | inject-only (60.8) |
 | `bankctx` | 1 / scheduled step | maintain the bank, inject the rendered bank instead of a note | bank-in-context (58.6) |
@@ -97,7 +97,7 @@ must be loud — while every out-of-range number is clamped rather than thrown.
 | `model.timeoutMs` | `20000` | Per-consult deadline, clamped to 500–300000. On timeout the step proceeds unchanged. |
 | `protocol` | `text` | `text` (one round-trip, tag grammar) or `tools` (four real tool schemas). |
 | `schedule.firstStep` | `true` | Consult on the first counted pre-step of the episode. |
-| `schedule.everySteps` | `1` | Consult every n-th counted pre-step after that. Clamped to 1–1000. |
+| `schedule.everySteps` | `1` | Consult every n-th counted pre-step after that. Clamped to 1–1000. One counted pre-step is one model step, mid-turn steps included. |
 | `schedule.maxCallsPerEpisode` | `40` | Hard cap on memory-model calls per episode (model-calling arms only). Clamped to 0–10000. |
 | `window.messages` | `8` | Transcript tail shown to the memory model — the paper's k=8. Clamped to 1–200. |
 | `window.toolResultChars` | `800` | Middle-truncation budget for each message text and tool result. |
@@ -111,7 +111,7 @@ must be loud — while every out-of-range number is clamped rather than thrown.
 | `alwaysText` | a generic three-check reminder | The fixed reminder used by `mode: always`. Domain-free on purpose. |
 | `locale` | `en` | Picks `prompts/memory.<locale>.md` (`en` or `zh`). |
 | `promptFile` | `''` | Absolute path overriding the bundled prompt. |
-| `writeTools` | `[]` | Tool names that count as "about to write": the last one seen is reported to the next consult as `<about_to_act>`. Empty means the memory model reads `unknown`. |
+| `writeTools` | `[]` | Tool names that count as a write. Every one seen since the previous consult is reported to the next one as `<recent_writes>`; they have already executed. Empty means the memory model reads `unknown` rather than `(none)`. |
 | `trace.dir` | `''` | Directory for the per-consult JSONL trace. Empty disables it. |
 | `trace.console` | `true` | One console line per inject / skip / error. |
 
@@ -155,18 +155,32 @@ You have not verified the user's identity yet; the policy forbids reading or mod
 
 It is created with `source: { kind: 'plugin', plugin: 'proactive-memory', form: 'recall' }` and
 spliced right after the last claimed message, so it still precedes a trailing runtime-context message
-the loop appended.
+the loop appended. On a mid-turn step nothing was claimed, so it lands at index 0 — still in front of
+that runtime-context message.
 
 ## Two hard rules
 
-**R1 — never `agent.inject()`, and never splice into an empty step.** `agent.inject()` queues into
+**R1 — never `agent.inject()`, and never splice into a step that would not otherwise run.** The
+reminder goes in before every model step; it never creates one. `agent.inject()` queues into
 `inbox.nextStep`, and the loop only breaks out of the step loop when `turnEnds && nextStep.length === 0`
 (`dsh-agent-loop:571`); a turn that should have ended gets one more model request, so one user turn
-produces two assistant messages. The same hazard applies to splicing: at `step === 0` an empty
-decision completes the turn (`dsh-agent-loop:543-546`), so adding a message there manufactures a
-request that would not otherwise happen. This plugin returns the decision **unchanged** whenever
-`decision.kind === 'reject'`, the claimed list is empty, or `decision.messages` is empty. A host can
-check the rule offline: exactly one assistant message per user turn, always.
+produces two assistant messages. Splicing carries the same hazard wherever an empty decision is what
+ends the turn — at `phase.step === 0` (`dsh-agent-loop:542-545`) and after `turnEnds` is set
+(`:541`). This plugin returns the decision **unchanged** whenever `decision.kind === 'reject'`, or
+the claimed list is empty and the step is not mid-turn.
+
+A **mid-turn** step — `step > 1`, reached because the previous reply made tool calls — is the case
+that is safe and used to be missed. `step()` logs those tool results straight into the session
+(`:685`) and returns `null`, so `turnEnds` is `null` and the loop runs the next step whatever the
+pre-step returns; the claimed list is empty there and `decision.messages` holds at most a
+runtime-context message. Splicing adds no request that would not happen anyway, and the reminder is
+logged at `step/start` right after the tool results — the position dsh's own runtime-context message
+takes. The plugin tells the cases apart by the session log: mid-turn ⇔ its last message is a tool
+result (`role: 'user'`, `source.kind: 'tool'`). Guarding on the empty claimed list alone, as v0.1
+did, silently dropped every step after the first of each turn: one consult per user turn instead of
+one per model request.
+
+A host can still check the rule offline: exactly one assistant message per user turn, always.
 
 **R2 — never `session.append()` a custom event type, and never `ctx.systemPrompt.section()`.**
 `dsh-session`'s known-event-type list rejects unknown types on replay, and a plugin cannot mark its
@@ -212,7 +226,9 @@ counts above are the only accounting there is. Price them with the same table th
 executor.
 
 On teardown the plugin logs one line:
-`[proactive-memory:<mode>] stats {"consults":…,"injects":…,"skips":…,"errors":…}`.
+`[proactive-memory:<mode>] stats {"consults":…,"injects":…,"skips":…,"errors":…,"guards":…}`.
+`guards` counts the pre-steps rule R1 returned untouched with no event at all — mostly the last step
+of each turn, which is a step that would not have run.
 
 ## Trace format
 
@@ -222,7 +238,7 @@ per file and fire-and-forget; any failure is swallowed, because tracing must not
 ```jsonc
 { "turn": 3, "step": 1,
   "system": "…the exact system prompt for this arm…",
-  "user":   "<task>…</task>\n\n<memory_bank>…</memory_bank>\n\n<already_told_the_agent>…</already_told_the_agent>\n\n<transcript step=\"1\" window=\"8\">[…]</transcript>\n\n<about_to_act>…</about_to_act>",
+  "user":   "<task>…</task>\n\n<memory_bank>…</memory_bank>\n\n<already_told_the_agent>…</already_told_the_agent>\n\n<transcript step=\"1\" window=\"8\">[…]</transcript>\n\n<recent_writes>…</recent_writes>",
   "reply":  "…the raw text of the reply…",
   "parsed": { "decision": "intervene", "note": "…", "edits": 2, "malformed": [] },
   "usage":  { "inputTokens": 1420, "outputTokens": 96 }, "ms": 812, "injected": true }
@@ -270,8 +286,9 @@ matter:
 
 ```bash
 npm install
-npm test     # node --test, 60 tests, entirely offline: no API key, no dsh runtime
-npm run demo # a scripted retail episode: the consult, the bank edits, the injected reminder, the events
+npm test     # node --test, 64 tests, entirely offline: no API key, no dsh runtime
+npm run demo # a scripted retail episode — a claimed step and a mid-turn step: the consults, the
+             # bank edits, the injected reminder, the events
 ```
 
 `prompts/memory.en.md` and `prompts/memory.zh.md` hold the system prompts. Regions marked

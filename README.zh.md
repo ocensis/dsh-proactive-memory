@@ -65,7 +65,7 @@ dsh plugin add dsh-plugin-proactive-memory
 | `mode` | 记忆模型调用 | 做什么 | 对应论文消融 |
 | --- | --- | --- | --- |
 | `off` | 0 | 一个监听器都不注册 | 基线 |
-| `always` | 0 | 每个调度点塞同一条固定提醒（`alwaysText`） | always-inject（61.5） |
+| `always` | 0 | 每个被调度到的 model step 之前塞同一条固定提醒（`alwaysText`） | always-inject（61.5） |
 | `proactive` | 每个调度点 1 次 | 完整机制：先维护库，再决定 | 完整 agent（61.2） |
 | `proactive-nobank` | 每个调度点 1 次 | 只做决定；不建库也不发库 | 只注入不建库（60.8） |
 | `bankctx` | 每个调度点 1 次 | 维护库，注入渲染后的整个库而不是精选提醒 | 全库塞上下文（58.6） |
@@ -91,7 +91,7 @@ dsh plugin add dsh-plugin-proactive-memory
 | `model.timeoutMs` | `20000` | 单次 consult 的截止时间，clamp 到 500–300000。超时则这一步原样放行。 |
 | `protocol` | `text` | `text`（一次往返的标签协议）或 `tools`（四个真实工具 schema）。 |
 | `schedule.firstStep` | `true` | 在 episode 的第一个计数 pre-step 上 consult。 |
-| `schedule.everySteps` | `1` | 之后每 n 个计数 pre-step consult 一次。clamp 到 1–1000。 |
+| `schedule.everySteps` | `1` | 之后每 n 个计数 pre-step consult 一次。clamp 到 1–1000。一个计数 pre-step 就是一次 model step，turn 中间那些也算。 |
 | `schedule.maxCallsPerEpisode` | `40` | 每个 episode 的记忆模型调用硬上限（只对要调模型的臂生效）。clamp 到 0–10000。 |
 | `window.messages` | `8` | 给记忆模型看的转录尾部条数，即论文的 k=8。clamp 到 1–200。 |
 | `window.toolResultChars` | `800` | 每条消息文本 / 工具结果的中间截断预算。 |
@@ -105,7 +105,7 @@ dsh plugin add dsh-plugin-proactive-memory
 | `alwaysText` | 一段通用的三问提醒 | `mode: always` 用的固定提醒，故意不带任何领域信息。 |
 | `locale` | `en` | 决定用 `prompts/memory.<locale>.md`（`en` 或 `zh`）。 |
 | `promptFile` | `''` | 绝对路径，覆盖内置提示词。 |
-| `writeTools` | `[]` | 哪些工具名算"即将写"：看到的最后一个会作为 `<about_to_act>` 报给下一次 consult。留空时记忆模型看到的是 `unknown`。 |
+| `writeTools` | `[]` | 哪些工具名算写操作。上一次 consult 以来看到的全部会作为 `<recent_writes>` 报给下一次 consult；它们都已经执行完了。留空时记忆模型看到的是 `unknown` 而不是 `(none)`。 |
 | `trace.dir` | `''` | 每次 consult 的 JSONL 落盘目录，留空则关闭。 |
 | `trace.console` | `true` | 每次 inject / skip / error 打一行控制台日志。 |
 
@@ -146,16 +146,28 @@ You have not verified the user's identity yet; the policy forbids reading or mod
 
 它带 `source: { kind: 'plugin', plugin: 'proactive-memory', form: 'recall' }`，
 splice 在最后一条 claimed 消息之后，因此仍然排在 loop 追加的 runtime-context 消息之前。
+turn 中间的 step 没有任何 claimed 消息，于是它落在下标 0 —— 一样排在那条 runtime-context 之前。
 
 ## 两条硬规则
 
-**R1 —— 绝不用 `agent.inject()`，也绝不往空 step 里 splice。** `agent.inject()` 把消息排进
-`inbox.nextStep`，而 loop 只在 `turnEnds && nextStep.length === 0` 时才跳出 step 循环
-（`dsh-agent-loop:571`），于是本该结束的 turn 又多一次模型请求，一个用户 turn 出现两条 assistant
-消息。splice 有同样的风险：`step === 0` 且 decision 为空时 loop 直接结束 turn
-（`dsh-agent-loop:543-546`），往那里塞消息等于凭空造出一次请求。所以只要
-`decision.kind === 'reject'`、claimed 列表为空、或 `decision.messages` 为空，本插件一律**原样返回**。
-宿主可以离线核这条规则：每个用户 turn 永远恰好一条 assistant 消息。
+**R1 —— 绝不用 `agent.inject()`，也绝不往一个本来不会跑的 step 里 splice。** 提醒放在每一次
+model step 之前，但绝不制造出一次 model step。`agent.inject()` 把消息排进 `inbox.nextStep`，而
+loop 只在 `turnEnds && nextStep.length === 0` 时才跳出 step 循环（`dsh-agent-loop:571`），于是本该
+结束的 turn 又多一次模型请求，一个用户 turn 出现两条 assistant 消息。凡是"decision 为空即结束
+turn"的位置，splice 都有同样的风险：`phase.step === 0` 时（`dsh-agent-loop:542-545`），以及
+`turnEnds` 已经置位之后（`:541`）。所以只要 `decision.kind === 'reject'`，或者 claimed 列表为空
+而这一步又不是 turn 中间的 step，本插件一律**原样返回**。
+
+**turn 中间的 step**（`step > 1`，因为上一条回复调了工具才走到这里）才是那个安全、而且以前被漏掉
+的情形：`step()` 已经把工具结果直接写进 session（`:685`）并返回 `null`，所以 `turnEnds` 是 `null`，
+不管 pre-step 返回什么这一步都会跑；那里 claimed 列表是空的，`decision.messages` 里至多只有一条
+runtime-context 消息。往里 splice 不会多出任何一次本来不存在的请求，提醒会在 `step/start` 处接在
+工具结果后面落进日志 —— 正是 dsh 自己那条 runtime-context 消息所在的位置。插件靠 session 日志区分
+两者：turn 中间 ⇔ 日志最后一条是工具结果（`role: 'user'`、`source.kind: 'tool'`）。v0.1 只看
+claimed 列表是否为空，于是每个 turn 第一步之后的所有 step 都被静默丢掉了：变成一个用户 turn 一次
+consult，而不是一次模型请求一次。
+
+宿主仍然可以离线核这条规则：每个用户 turn 永远恰好一条 assistant 消息。
 
 **R2 —— 绝不 `session.append()` 自定义事件类型，绝不 `ctx.systemPrompt.section()`。**
 `dsh-session` 的已知事件类型表在回放时会直接拒绝表外类型，插件也设不了 `ignorable`。
@@ -197,7 +209,8 @@ ctx.on('proactive-memory/event', e => { /* e.kind 是 consult | inject | skip | 
 用宿主给执行模型算钱的同一份价格表算它。
 
 插件退出时打一行：
-`[proactive-memory:<mode>] stats {"consults":…,"injects":…,"skips":…,"errors":…}`。
+`[proactive-memory:<mode>] stats {"consults":…,"injects":…,"skips":…,"errors":…,"guards":…}`。
+`guards` 是被 R1 原样放行、一个事件都不发的 pre-step 数，绝大多数是每个 turn 的最后一步 —— 那一步本来就不会跑。
 
 ## 轨迹格式
 
@@ -207,7 +220,7 @@ ctx.on('proactive-memory/event', e => { /* e.kind 是 consult | inject | skip | 
 ```jsonc
 { "turn": 3, "step": 1,
   "system": "……这个臂用的确切系统提示……",
-  "user":   "<task>…</task>\n\n<memory_bank>…</memory_bank>\n\n<already_told_the_agent>…</already_told_the_agent>\n\n<transcript step=\"1\" window=\"8\">[…]</transcript>\n\n<about_to_act>…</about_to_act>",
+  "user":   "<task>…</task>\n\n<memory_bank>…</memory_bank>\n\n<already_told_the_agent>…</already_told_the_agent>\n\n<transcript step=\"1\" window=\"8\">[…]</transcript>\n\n<recent_writes>…</recent_writes>",
   "reply":  "……回复的原始文本……",
   "parsed": { "decision": "intervene", "note": "…", "edits": 2, "malformed": [] },
   "usage":  { "inputTokens": 1420, "outputTokens": 96 }, "ms": 812, "injected": true }
@@ -249,8 +262,9 @@ ctx.on('proactive-memory/event', e => { /* e.kind 是 consult | inject | skip | 
 
 ```bash
 npm install
-npm test     # node --test，60 个用例，完全离线：不用 key，不用 dsh 运行时
-npm run demo # 一个脚本化的 retail episode：consult、库编辑、注入的提醒、事件
+npm test     # node --test，64 个用例，完全离线：不用 key，不用 dsh 运行时
+npm run demo # 一个脚本化的 retail episode，一个 claimed step 加一个 turn 中间的 step：
+             # consult、库编辑、注入的提醒、事件
 ```
 
 系统提示在 `prompts/memory.en.md` 和 `prompts/memory.zh.md`。用

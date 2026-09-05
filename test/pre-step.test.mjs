@@ -6,12 +6,37 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { apply } from '../src/index.mjs'
-import { assistantMsg, fakeAgent, makeCtx, pluginMsg, preStepOf, reminderIn, runPreStep, textChunks, textOf, toolChunks, userMsg } from './helpers.mjs'
+import { assistantMsg, fakeAgent, makeCtx, pluginMsg, preStepOf, reminderIn, runPreStep, textChunks, textOf, toolChunks, toolMsg, userMsg } from './helpers.mjs'
 
 const ARM = { mode: 'proactive', model: { provider: 'openrouter', model: 'cheap' }, trace: { console: false } }
 const NOTE = '<context_for_action>You have not verified the user yet.</context_for_action>'
 const kinds = ctx => ctx.events.map(e => e.payload.kind)
 const of = (ctx, kind) => ctx.events.map(e => e.payload).filter(e => e.kind === kind)
+
+/**
+ * One episode driven the way dsh-agent-loop drives one (:516-573): one pre-step per model request;
+ * messages are claimed from the inbox only on the first step of a turn; step() logs the assistant
+ * reply and its tool results straight into the session before the next pre-step runs.
+ * @returns {{modelSteps: number, injects: number}}
+ */
+async function runEpisode(ctx, agent, log, turns) {
+  let modelSteps = 0
+  let injects = 0
+  for (const [i, spec] of turns.entries()) {
+    for (let step = 1; step <= spec.steps; step++) {
+      modelSteps++
+      const claimed = step === 1 ? [userMsg(spec.user)] : []
+      const base = { kind: 'enter', messages: [...claimed] }
+      const out = await runPreStep(ctx, { agent, messages: claimed, turn: i + 1, step, decision: base })
+      if (out !== base) injects++
+      log.push(...claimed) // step/start appends the decision's messages
+      const last = step === spec.steps
+      log.push(assistantMsg(last ? 'all set' : 'looking that up', last ? [] : [{ name: 'get_order_details', arguments: '{}' }]))
+      if (!last) log.push(toolMsg('c0', '{"status":"delivered"}')) // executeToolCalls appends these itself
+    }
+  }
+  return { modelSteps, injects }
+}
 
 test('mode=off registers nothing at all', () => {
   const ctx = makeCtx()
@@ -28,23 +53,69 @@ test('a rejected step is returned untouched and costs no model call', async () =
   assert.equal(ctx.llmCalls, 0)
 })
 
-test('an empty claimed list is returned untouched and costs no model call (rule R1)', async () => {
+// Rule R1, case (a): at step 1 with nothing claimed the loop completes the turn without a request
+// (dsh-agent-loop:542-545), so a spliced message would manufacture one.
+test('step 1 with nothing claimed is returned untouched and costs no model call (rule R1)', async () => {
   const ctx = makeCtx({ script: [textChunks(NOTE)] })
   apply(ctx, ARM)
   const base = { kind: 'enter', messages: [pluginMsg('runtime context', 'x')] }
-  const out = await runPreStep(ctx, { agent: fakeAgent(), messages: [], decision: base })
+  const out = await runPreStep(ctx, { agent: fakeAgent(), messages: [], step: 1, decision: base })
   assert.equal(out, base)
   assert.equal(ctx.llmCalls, 0)
   assert.deepEqual(kinds(ctx), [])
 })
 
-test('an empty decision is returned untouched: splicing there would manufacture a request', async () => {
+// Rule R1, case (b): a pre-step reached after the turn already ended. The previous reply had no
+// tool calls, so the session log ends with an assistant message and no tool result follows it;
+// dsh-agent-loop:541 breaks on an empty decision, and splicing would resurrect a finished turn.
+test('a pre-step after the turn ended is returned untouched, even at step > 1 (rule R1)', async () => {
   const ctx = makeCtx({ script: [textChunks(NOTE)] })
   apply(ctx, ARM)
+  const log = [userMsg('cancel order W1'), assistantMsg('Done — anything else?')]
   const base = { kind: 'enter', messages: [] }
-  const out = await runPreStep(ctx, { agent: fakeAgent(), messages: [userMsg('hi')], decision: base })
+  const out = await runPreStep(ctx, { agent: fakeAgent('s1', log), messages: [], step: 3, decision: base })
   assert.equal(out, base)
   assert.equal(ctx.llmCalls, 0)
+  assert.deepEqual(kinds(ctx), [])
+})
+
+// The mid-turn step the old empty-list guards suppressed. The previous reply made tool calls, so
+// step() logged their results into the session and returned null: turnEnds is null, neither :541 nor
+// :542-545 can fire, and the loop runs this step whatever we return. Splicing adds no request.
+test('a mid-turn step is spliced into even though nothing was claimed', async () => {
+  const ctx = makeCtx({ script: [textChunks(NOTE)] })
+  apply(ctx, ARM)
+  const log = [
+    userMsg('cancel order W1'),
+    assistantMsg('Let me look.', [{ name: 'get_order_details', arguments: '{"order_id":"W1"}' }]),
+    toolMsg('c1', '{"status":"pending"}'),
+  ]
+  const base = { kind: 'enter', messages: [] }
+  const out = await runPreStep(ctx, { agent: fakeAgent('s1', log), messages: [], step: 3, decision: base })
+
+  assert.notEqual(out, base)
+  assert.equal(out.messages.length, 1)
+  assert.equal(out.messages[0].source.plugin, 'proactive-memory')
+  assert.ok(textOf(out.messages[0]).includes('You have not verified the user yet.'))
+  assert.deepEqual(kinds(ctx), ['consult', 'inject'])
+  assert.equal(of(ctx, 'inject')[0].step, 3)
+})
+
+test('a mid-turn reminder still precedes a trailing runtime-context message', async () => {
+  const ctx = makeCtx({ script: [textChunks(NOTE)] })
+  apply(ctx, ARM)
+  const log = [
+    userMsg('cancel order W1'),
+    assistantMsg('Let me look.', [{ name: 'get_order_details', arguments: '{"order_id":"W1"}' }]),
+    toolMsg('c1', '{"status":"pending"}'),
+  ]
+  const context = pluginMsg('runtime context snapshot', 'dsh-runtime-context')
+  const base = { kind: 'enter', messages: [context] }
+  const out = await runPreStep(ctx, { agent: fakeAgent('s1', log), messages: [], step: 2, decision: base })
+
+  assert.equal(out.messages.length, 2)
+  assert.equal(out.messages[0].source.plugin, 'proactive-memory') // index 0: lastClaimedIndex is -1
+  assert.equal(out.messages[1], context)
 })
 
 test('a normal step splices one reminder after the last claimed message and before runtime context', async () => {
@@ -82,7 +153,7 @@ test('the memory model gets the task, the transcript and the claimed turn', asyn
   assert.ok(sent.includes('<task>\ncancel order W1\n</task>'))
   assert.ok(sent.includes('<transcript step="1" window="8">'))
   assert.ok(sent.includes('yes please'))
-  assert.ok(sent.includes('<about_to_act>\nunknown\n</about_to_act>'))
+  assert.ok(sent.includes('<recent_writes>\nunknown\n</recent_writes>')) // nothing configured to watch
   assert.ok(ctx.calls[0].system.includes('PHASE 2'))
   assert.equal(ctx.calls[0].temperature, 0)
   assert.equal(ctx.calls[0].maxTokens, 512)
@@ -306,9 +377,11 @@ test('an unexpected throw anywhere after next() still returns the original decis
   assert.equal(of(ctx, 'error')[0].code, 'listener')
 })
 
-test('tools/pre-execute only observes, and feeds <about_to_act>', async () => {
+// The section can only ever report writes that already ran: tools/pre-execute fires as the call is
+// dispatched, and the next consult happens at the pre-step after its result was logged.
+test('tools/pre-execute only observes, and feeds <recent_writes>', async () => {
   const ctx = makeCtx({ script: () => textChunks('<no_intervention/>') })
-  apply(ctx, { ...ARM, writeTools: ['modify_order'] })
+  apply(ctx, { ...ARM, writeTools: ['modify_order', 'cancel_order'] })
   const agent = fakeAgent()
   await runPreStep(ctx, { agent, messages: [userMsg('hi')], step: 1 })
 
@@ -317,14 +390,54 @@ test('tools/pre-execute only observes, and feeds <about_to_act>', async () => {
   const decision = await preExec({ agent, name: 'modify_order', arguments: { id: 'W1' } }, async () => { nexted = true; return { kind: 'allow' } })
   assert.equal(nexted, true)
   assert.deepEqual(decision, { kind: 'allow' }) // observe only: never deny, never ask
-  await preExec({ agent, name: 'get_order', arguments: { id: 'W2' } }, async () => ({ kind: 'allow' }))
+  await preExec({ agent, name: 'get_order', arguments: { id: 'W2' } }, async () => ({ kind: 'allow' })) // not a write
+  await preExec({ agent, name: 'cancel_order', arguments: { id: 'W3' } }, async () => ({ kind: 'allow' }))
 
   await runPreStep(ctx, { agent, messages: [userMsg('yes')], step: 2 })
   const sent = textOf(ctx.calls[1].messages[0])
-  assert.ok(sent.includes('<about_to_act>\nmodify_order {"id":"W1"}'), sent)
+  assert.ok(sent.includes('<recent_writes>\nmodify_order {"id":"W1"}\ncancel_order {"id":"W3"}\n</recent_writes>'), sent)
 
+  // Consumed: the section covers the span since the previous consult, and writeTools is configured,
+  // so an empty span reads `(none)` — a different answer from the unconfigured `unknown`.
   await runPreStep(ctx, { agent, messages: [userMsg('ok')], step: 3 })
-  assert.ok(textOf(ctx.calls[2].messages[0]).includes('<about_to_act>\nunknown')) // consumed
+  assert.ok(textOf(ctx.calls[2].messages[0]).includes('<recent_writes>\n(none)\n</recent_writes>'))
+})
+
+test('mode=always injects exactly once per model step across a whole episode', async () => {
+  const ctx = makeCtx()
+  apply(ctx, { mode: 'always', trace: { console: false }, alwaysText: 'CHECK YOURSELF' })
+  const log = []
+  const { modelSteps, injects } = await runEpisode(ctx, fakeAgent('s1', log), log, [
+    { user: 'cancel order W1', steps: 4 },
+    { user: 'yes, the keyboard', steps: 3 },
+    { user: 'that is all', steps: 1 },
+  ])
+  assert.equal(modelSteps, 8)
+  assert.equal(injects, 8) // one per model request, not one per user turn
+  assert.equal(of(ctx, 'inject').length, 8)
+  assert.deepEqual(of(ctx, 'inject').map(e => [e.turn, e.step]), [
+    [1, 1], [1, 2], [1, 3], [1, 4], [2, 1], [2, 2], [2, 3], [3, 1],
+  ])
+  assert.equal(ctx.llmCalls, 0)
+  assert.deepEqual(of(ctx, 'skip'), [])
+})
+
+test('proactive consults on mid-turn steps, and the window carries the tool result that just arrived', async () => {
+  const ctx = makeCtx({ script: () => textChunks('<no_intervention/>') })
+  apply(ctx, { ...ARM, schedule: { maxCallsPerEpisode: 100 } })
+  const log = []
+  const { modelSteps } = await runEpisode(ctx, fakeAgent('s1', log), log, [
+    { user: 'cancel order W1', steps: 3 },
+    { user: 'yes', steps: 2 },
+  ])
+  assert.equal(modelSteps, 5)
+  assert.equal(ctx.llmCalls, 5) // one consult per model step
+  assert.deepEqual(of(ctx, 'consult').map(e => [e.turn, e.step]), [[1, 1], [1, 2], [1, 3], [2, 1], [2, 2]])
+
+  const midTurn = textOf(ctx.calls[1].messages[0]) // the consult at (turn 1, step 2)
+  assert.ok(midTurn.includes('"role": "tool"'), midTurn)
+  assert.ok(midTurn.includes('delivered'), midTurn) // the tool result step() logged a moment ago
+  assert.ok(midTurn.includes('<transcript step="2"'), midTurn)
 })
 
 test('with no model configured it falls back to the executor default and warns once', async () => {

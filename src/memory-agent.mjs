@@ -37,7 +37,7 @@ export function loadPrompt(cfg) {
 
 const tag = (name, body) => `<${name}>\n${body}\n</${name}>`
 
-/** The per-call user message: task, bank, what we already said, the transcript, the pending write. */
+/** The per-call user message: task, bank, what we already said, the transcript, the writes that ran. */
 export function buildUserText(cfg, input) {
   const parts = [tag('task', input.task || '(no task text)')]
   if (cfg.mode !== 'proactive-nobank') parts.push(tag('memory_bank', input.bankRender || '(empty)'))
@@ -45,7 +45,8 @@ export function buildUserText(cfg, input) {
   parts.push(
     `<transcript step="${input.step}" window="${cfg.window.messages}">\n${JSON.stringify(input.transcript, null, 1)}\n</transcript>`,
   )
-  parts.push(tag('about_to_act', input.aboutToAct || 'unknown'))
+  // Already executed by the time this call is made — the section name and the prompt both say so.
+  parts.push(tag('recent_writes', input.recentWrites || 'unknown'))
   return parts.join('\n\n')
 }
 

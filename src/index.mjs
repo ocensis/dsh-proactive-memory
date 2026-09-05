@@ -19,12 +19,15 @@ export { Config }
 
 const sidOf = x => String(x?.agent?.id ?? x?.agent?.session?.id ?? x?.id ?? 'unknown')
 
+/** Cap on the writes carried into one `<recent_writes>` section, oldest dropped first. */
+const MAX_RECENT_WRITES = 8
+
 export function apply(ctx, config) {
   const cfg = resolveConfig(config)
   if (cfg.mode === 'off') return // registers nothing at all: zero listeners, zero cost
 
   const states = new Map() // String(agent.id) -> episode state. Never module-level: 4 sessions share a process.
-  const stats = { consults: 0, injects: 0, skips: 0, errors: 0 }
+  const stats = { consults: 0, injects: 0, skips: 0, errors: 0, guards: 0 }
   const log = (kind, fields) => emit(ctx, kind, fields, { console: cfg.trace.console, mode: cfg.mode })
   let warnedFallback = false
 
@@ -46,7 +49,7 @@ export function apply(ctx, config) {
   function stateFor(sid) {
     let s = states.get(sid)
     if (!s) {
-      s = { bank: createBank(), counted: 0, calls: 0, injected: [], lastBankRender: '', lastWrite: null, toolErrors: 0, turn: 0 }
+      s = { bank: createBank(), counted: 0, calls: 0, injected: [], lastBankRender: '', recentWrites: [], toolErrors: 0, turn: 0 }
       states.set(sid, s)
     }
     return s
@@ -54,12 +57,46 @@ export function apply(ctx, config) {
 
   /** Everything after next(). Any throw in here is caught by the listener and fails open. */
   async function decide({ agent, messages, turn, step, signal }, decision) {
-    // ── LOOP SAFETY (dsh-agent-loop:540-546, :571) ────────────────────────────────────────────
-    // Splicing into an empty step manufactures a model request that would not otherwise happen —
-    // exactly the agent.inject() bug. Three guards, all returning the decision untouched.
+    // ── LOOP SAFETY (dsh-agent-loop: preStep :492-514, turn :516-573, step :606-686) ──────────
+    // The turn loop is: preStep() → three guard lines → session.append('step/start') → step(). So
+    // there is exactly one pre-step per model request, and the question is never "is this step
+    // real" but "would this step run if I returned the decision untouched".
+    //
+    //   :541      if (turnEnds && decision.messages.length === 0) break;
+    //   :542-545  if (phase.step === 0 && decision.messages.length === 0) { turnEnds = completed; return false }
+    //   :571      if (turnEnds && this.inbox.nextStep.length === 0) break;
+    //
+    // MID-TURN steps (step > 1, reached because the previous reply had tool calls) are SAFE to
+    // splice into. step() logged their tool results straight into the session (:685, not via the
+    // inbox) and returned null, so `turnEnds` is null and neither :541 nor :542-545 can fire: the
+    // loop runs this step whatever we return. `messages` (the inbox claim, :496) is empty there
+    // and `decision.messages` holds at most a runtime-context message, so the old "empty list"
+    // guards below suppressed every mid-turn step silently — one consult per user turn instead of
+    // one per model request. Splicing adds no request that would not happen anyway; the reminder is
+    // logged as a user/message at step/start right after the tool results, the same position dsh's
+    // own runtime-context message occupies.
+    //
+    // Two cases stay UNSAFE and are still guarded, both of them the R1 bug:
+    //   (a) step 1 of a turn with nothing claimed — :542-545 completes the turn without a request,
+    //       so a spliced message manufactures one.
+    //   (b) any pre-step reached after the turn already ended (the previous reply had no tool calls,
+    //       or hit max-tokens). That only happens when inbox.nextStep was non-empty (steering,
+    //       inject), and :541 breaks on an empty decision — a splice resurrects a finished turn and
+    //       the user turn ends up with two assistant messages.
+    // The session log tells them apart: mid-turn ⇔ its last message is a tool result (role 'user',
+    // source.kind 'tool'). After a completed turn the last message is the assistant reply — with no
+    // tool-call blocks, or with blocks that max-tokens cut before any result could follow. Either
+    // way not a tool-result message, so the test correctly says "not mid-turn".
     if (decision.kind === 'reject') return decision
-    if (!Array.isArray(messages) || messages.length === 0) return decision
-    if (!Array.isArray(decision.messages) || decision.messages.length === 0) return decision
+    const claimed = Array.isArray(messages) ? messages : []
+    const derived = agent?.session?.deriveMessages?.() ?? []
+    const last = derived.at?.(-1)
+    const midTurn = step > 1 && !!last && last.role === 'user' && last.source?.kind === 'tool'
+    if (claimed.length === 0 && !midTurn) {
+      stats.guards++ // counted, never an event: this is the common case, not an anomaly
+      return decision
+    }
+    if (!Array.isArray(decision.messages)) return decision
 
     const sid = sidOf({ agent })
     const state = stateFor(sid)
@@ -86,15 +123,19 @@ export function apply(ctx, config) {
         return decision
       }
       const route = resolveRoute()
-      const derived = agent?.session?.deriveMessages?.() ?? []
-      const win = buildWindow(derived, messages, cfg)
-      const aboutToAct = state.lastWrite ? `${state.lastWrite.name} ${state.lastWrite.args}` : ''
-      state.lastWrite = null // consumed: <about_to_act> reports what happened since the last consult
+      const win = buildWindow(derived, claimed, cfg)
+      // Consumed here: <recent_writes> reports the writes observed since the PREVIOUS consult, all
+      // of them already executed. `unknown` and `(none)` are different answers — nothing configured
+      // to watch versus nothing written.
+      const recentWrites = state.recentWrites.length
+        ? state.recentWrites.join('\n')
+        : (cfg.writeTools.length > 0 ? '(none)' : 'unknown')
+      state.recentWrites = []
 
       state.calls++
       let out
       try {
-        out = await consult(ctx, cfg, state, { ...win, step, route, sessionId: agent?.session?.id, aboutToAct }, signal)
+        out = await consult(ctx, cfg, state, { ...win, step, route, sessionId: agent?.session?.id, recentWrites }, signal)
       } catch (error) {
         stats.errors++
         log('error', { ...at, message: String(error?.message ?? error), code: error?.name ?? 'Error' })
@@ -163,8 +204,10 @@ export function apply(ctx, config) {
       source: { kind: 'plugin', plugin: PLUGIN, form: 'recall' },
     })
     // Official splice (dsh-agent-instructions:1284-1288): right after the last claimed message, so the
-    // reminder still precedes a trailing runtime-context message the loop appended.
-    const lastClaimedIndex = decision.messages.findLastIndex(m => messages.includes(m))
+    // reminder still precedes a trailing runtime-context message the loop appended. On a mid-turn
+    // step nothing was claimed, so this is -1 and the reminder lands at index 0 — still in front of
+    // that runtime-context message.
+    const lastClaimedIndex = decision.messages.findLastIndex(m => claimed.includes(m))
     const spliced = decision.messages.toSpliced(lastClaimedIndex + 1, 0, reminder)
 
     state.injected.push(note)
@@ -192,13 +235,20 @@ export function apply(ctx, config) {
     }
   })
 
-  // Observe-only. The confirm-gate is registered before us, so a gated deny never reaches here —
-  // which is correct: a denied call is not "about to act", it is already a tool result in the log.
+  // Observe-only, always next(). The confirm-gate is registered before us, so a gated deny never
+  // reaches here — which is correct: a denied call never executed, and it is already a tool result
+  // in the transcript the memory model reads anyway.
+  //
+  // This fires while the call is being dispatched, and the next consult happens at the pre-step
+  // AFTER its result was logged: what we collect here is always a write that has already run, which
+  // is what <recent_writes> says. There is no hook that sees a write before it executes.
   ctx.on('tools/pre-execute', async (exec, next) => {
     try {
       const state = states.get(sidOf(exec))
       if (state && cfg.writeTools.includes(exec.name)) {
-        state.lastWrite = { name: exec.name, args: middleTruncate(JSON.stringify(exec.arguments ?? {}), cfg.window.argChars) }
+        state.recentWrites.push(`${exec.name} ${middleTruncate(JSON.stringify(exec.arguments ?? {}), cfg.window.argChars)}`)
+        // Bounded: a consult that never happens (schedule, max-calls) must not grow this forever.
+        if (state.recentWrites.length > MAX_RECENT_WRITES) state.recentWrites.splice(0, state.recentWrites.length - MAX_RECENT_WRITES)
       }
     } catch { /* observation only */ }
     return next()
