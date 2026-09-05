@@ -1,11 +1,15 @@
 # dsh-plugin-proactive-memory
 
 A [dsh](https://www.npmjs.com/package/@deepseek-ai/dsh) plugin. Inside **one task episode**, a cheap
-"memory model" watches the executor agent step by step. Before each of the executor's model requests
-the plugin
+"memory model" watches the executor agent step by step. Before **every model step** — the first step
+of a user turn *and* every mid-turn step that follows a tool result — the plugin
 
 1. maintains a private bank `{status, knowledge[], procedural[]}` the executor never sees, and
-2. decides to stay silent or to splice **one** short reminder in front of the executor's next request.
+2. decides to stay silent or to splice **one** short reminder in front of that step's request.
+
+The unit is one model request, not one user turn: a turn whose reply calls three tools in sequence is
+four steps, hence four scheduled points. The plugin never manufactures a step the loop would not have
+run anyway — [R1](#two-hard-rules) names the cases it deliberately sits out.
 
 The executor's system prompt, tools and decoding are untouched, and the memory model's own tools are
 never registered with the host's tool runtime. There is no cross-episode persistence in v0.1.
@@ -28,7 +32,8 @@ reward. The open question is whether the effect survives a memory model far chea
 paper's, on a different harness and a different executor.
 
 Those are the paper's numbers, from the paper's setup. **This plugin has no benchmark results yet** —
-only offline tests and a scripted smoke run.
+offline tests, a scripted demo, and a handful of smoke episodes on a τ²-bench harness that check the
+wiring, the cadence and the cost accounting. Nothing here measures the effect.
 
 ## Install
 
@@ -75,6 +80,11 @@ dsh plugin add dsh-plugin-proactive-memory
 | `proactive-nobank` | 1 / scheduled step | decide only; no bank is built or sent | inject-only (60.8) |
 | `bankctx` | 1 / scheduled step | maintain the bank, inject the rendered bank instead of a note | bank-in-context (58.6) |
 
+A *scheduled step* is a counted pre-step, and one pre-step is one model request — mid-turn steps
+after a tool result included. At the default `everySteps: 1` a model-calling arm therefore costs one
+consult per model request, not one per user turn; `maxCallsPerEpisode` is the ceiling on that, and
+`everySteps: 2` is the cheap way to halve it.
+
 `always` costs nothing on the memory side and in the paper it matched the curated arm. Run it before
 paying for anything else. `bankctx` injects the bank only when it has **changed** since the last
 injection — otherwise every step would repeat the same block verbatim.
@@ -96,7 +106,7 @@ must be loud — while every out-of-range number is clamped rather than thrown.
 | `model.maxTokens` | `512` | Clamped to 16–8192. A `max-tokens` finish counts as a failure, not a stop (see below). |
 | `model.timeoutMs` | `20000` | Per-consult deadline, clamped to 500–300000. On timeout the step proceeds unchanged. |
 | `protocol` | `text` | `text` (one round-trip, tag grammar) or `tools` (four real tool schemas). |
-| `schedule.firstStep` | `true` | Consult on the first counted pre-step of the episode. |
+| `schedule.firstStep` | `true` | Consult on the first counted pre-step of the episode — step 1 of turn 1. |
 | `schedule.everySteps` | `1` | Consult every n-th counted pre-step after that. Clamped to 1–1000. One counted pre-step is one model step, mid-turn steps included. |
 | `schedule.maxCallsPerEpisode` | `40` | Hard cap on memory-model calls per episode (model-calling arms only). Clamped to 0–10000. |
 | `window.messages` | `8` | Transcript tail shown to the memory model — the paper's k=8. Clamped to 1–200. |
@@ -164,21 +174,37 @@ that runtime-context message.
 reminder goes in before every model step; it never creates one. `agent.inject()` queues into
 `inbox.nextStep`, and the loop only breaks out of the step loop when `turnEnds && nextStep.length === 0`
 (`dsh-agent-loop:571`); a turn that should have ended gets one more model request, so one user turn
-produces two assistant messages. Splicing carries the same hazard wherever an empty decision is what
-ends the turn — at `phase.step === 0` (`dsh-agent-loop:542-545`) and after `turnEnds` is set
-(`:541`). This plugin returns the decision **unchanged** whenever `decision.kind === 'reject'`, or
-the claimed list is empty and the step is not mid-turn.
+produces two assistant messages. Splicing carries the same hazard wherever an *empty decision* is
+what ends the turn — at `phase.step === 0` (`dsh-agent-loop:542-545`) and after `turnEnds` is set
+(`:541`). So the question at a pre-step is never "is this step real" but "would this step run if I
+returned the decision untouched".
 
-A **mid-turn** step — `step > 1`, reached because the previous reply made tool calls — is the case
-that is safe and used to be missed. `step()` logs those tool results straight into the session
-(`:685`) and returns `null`, so `turnEnds` is `null` and the loop runs the next step whatever the
-pre-step returns; the claimed list is empty there and `decision.messages` holds at most a
-runtime-context message. Splicing adds no request that would not happen anyway, and the reminder is
-logged at `step/start` right after the tool results — the position dsh's own runtime-context message
-takes. The plugin tells the cases apart by the session log: mid-turn ⇔ its last message is a tool
-result (`role: 'user'`, `source.kind: 'tool'`). Guarding on the empty claimed list alone, as v0.1
-did, silently dropped every step after the first of each turn: one consult per user turn instead of
-one per model request.
+The plugin returns the decision **unchanged**, with no event and no consult, in exactly three cases:
+
+| guarded case | why |
+| --- | --- |
+| `decision.kind === 'reject'` | the loop is not entering a step at all. |
+| step 1 of a turn with nothing claimed from the inbox | `:542-545` completes the turn without a request; a spliced message would manufacture one. |
+| any pre-step reached after the turn already ended — the previous reply had no tool calls, or hit max-tokens | it is only reached because `inbox.nextStep` was non-empty (steering, inject), and `:541` breaks on an empty decision; a splice resurrects a finished turn into a second assistant message. |
+
+The last two are counted as `guards` in the teardown line, never as `skip` events: they are the
+normal shape of a turn, not an anomaly. The trailing guarded pre-step of every turn is the bulk of
+that count.
+
+Everything else is spliced, and that includes the case v0.1 got wrong. A **mid-turn** step —
+`step > 1`, reached because the previous reply made tool calls — is safe: `step()` logs those tool
+results straight into the session (`:685`) and returns `null`, so `turnEnds` is `null` and neither
+`:541` nor `:542-545` can fire; the loop runs this step whatever the pre-step returns. The claimed
+list is empty there and `decision.messages` holds at most a runtime-context message, so guarding on
+"claimed is empty" alone — as v0.1 did — silently dropped every step after the first of each turn:
+one consult per *user turn* instead of one per *model request*, with no event to show for it.
+Splicing there adds no request that would not happen anyway, and the reminder is logged at
+`step/start` right after the tool results, the position dsh's own runtime-context message takes.
+
+The plugin tells the two apart by the session log: mid-turn ⇔ its last message is a tool result
+(`role: 'user'`, `source.kind: 'tool'`). After a completed turn the last message is the assistant
+reply — no tool-call blocks, or blocks that max-tokens cut before any result could follow — which is
+not a tool-result message either way, so the test correctly says "not mid-turn".
 
 A host can still check the rule offline: exactly one assistant message per user turn, always.
 
@@ -227,8 +253,9 @@ executor.
 
 On teardown the plugin logs one line:
 `[proactive-memory:<mode>] stats {"consults":…,"injects":…,"skips":…,"errors":…,"guards":…}`.
-`guards` counts the pre-steps rule R1 returned untouched with no event at all — mostly the last step
-of each turn, which is a step that would not have run.
+`guards` counts the pre-steps rule R1 returned untouched with no event at all (the last two rows of
+its table) — mostly the trailing pre-step of each turn, a step that would not have run. Roughly one
+per user turn is healthy; `consults + skips` climbing by one per *model request* is the cadence.
 
 ## Trace format
 

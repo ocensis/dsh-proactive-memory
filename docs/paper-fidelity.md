@@ -1,8 +1,9 @@
 # Fidelity to *Proactive Memory* (arXiv 2607.08716)
 
 Item by item: what the paper does, what this plugin does, whether they match, and why when they do
-not. Everything here describes **v0.1**, which has been tested offline but not yet run as an
-experiment — there are no results of ours to report.
+not. Everything here describes **v0.1**, which has been tested offline and smoke-run on a τ²-bench
+harness — enough to confirm the wiring and the cadence, not enough to be an experiment. There are no
+results of ours to report.
 
 Reference implementation: `github.com/yifannnwu/proactive-memory-agent`
 (`src/memory_agent/memory/memory_agent.py` — `PHASE1_SYSTEM`, `PHASE2_SYSTEM`, the four tool schemas).
@@ -12,7 +13,7 @@ Reference implementation: `github.com/yifannnwu/proactive-memory-agent`
 | # | Paper mechanism | This plugin | Same? | Why |
 | --- | --- | --- | --- | --- |
 | 1 | A separate memory model watches one task episode; it never talks to the user and never calls the executor's tools. | Same: `ctx.llm.stream` on its own route, no tool of the executor is ever invoked, nothing is spoken to the user. | Same | The core claim under test. |
-| 2 | Consulted at the first step and then at every step. | Same by default; `schedule.firstStep`, `schedule.everySteps` and `schedule.maxCallsPerEpisode` make the cadence an axis. | Same (defaults) | The interval is itself an ablation worth having, and the cap keeps a runaway episode from spending unboundedly. |
+| 2 | Consulted at the first step and then at every step. | Same by default: one consult before every model step, mid-turn steps after a tool result included — the unit is a model request, not a user turn. `schedule.firstStep`, `schedule.everySteps` and `schedule.maxCallsPerEpisode` make the cadence an axis. | Same (defaults) | The interval is itself an ablation worth having, and the cap keeps a runaway episode from spending unboundedly. The mid-turn steps are the majority of them in a tool-heavy domain, so missing them would silently be a different, much cheaper arm. |
 | 3 | Sees the task, the last k=8 messages, and its own bank. | Same: `<task>`, `<transcript window="8">`, `<memory_bank>`, with the transcript JSON-framed and tool results middle-truncated to 800 chars. | Same, different framing | Transcript text can contain anything; JSON is a delimiter it cannot break out of. Truncation bounds the cost of the auxiliary call. |
 | 4 | Bank `B = (status, knowledge, procedural)`. | Same three parts, same meanings: one-sentence status, facts costly to re-derive, one domain rule broken or about to be broken (phrased as an instruction). | Same | — |
 | 5 | Four bank operations: `memory_update_status`, `memory_save_knowledge`, `memory_save_procedural`, `memory_delete`. | Same four, with the same semantics (reusing an id overwrites in place; delete removes by id). | Same | — |
@@ -50,7 +51,7 @@ setting; none of them changes the mechanism under test.
 | Bank caps (`maxKnowledge`, `maxProcedural`, drop-oldest) and `maxEditsPerCall`. | An unbounded bank inflates every later consult, and a cheap model writes more entries than a strong one. Every drop and every rejected edit is reported as `malformed` so the cost is visible. |
 | Injection budget, Jaccard dedupe, and `<already_told_the_agent>`. | Direct mitigations of row 9's persistence, and of a cheap model's tendency to over-interrupt. |
 | `stripUnsafe()` + frame-body escaping + "a note that strips to nothing is dropped". | The memory model reads tool output verbatim and its note lands in another agent's context — an injection-laundering path. Mechanical defense, not a sanitizer (see the README's trust boundary). |
-| `<recent_writes>`: the `writeTools` calls observed on `tools/pre-execute` since the previous consult, reported with their arguments. | A write that just ran is where a follow-up is worth the most, and its arguments are the one signal the truncated transcript window may no longer carry. The section is honest about its timing: there is no hook that sees a write *before* it executes, so it never claims to. Empty by default (`writeTools: []`), in which case the model reads `unknown`. |
+| `<recent_writes>`: the `writeTools` calls observed on `tools/pre-execute` since the previous consult, reported with their arguments. | A write that just ran is where a follow-up is worth the most, and its arguments are the one signal the truncated transcript window may no longer carry. The section is honest about its timing: there is no hook that sees a write *before* it executes, so it never claims to. The plugin's own default is empty (`writeTools: []`), in which case the model reads `unknown` rather than `(none)` — a host is expected to fill it from whatever it already calls a write (τ²: the confirm gate's tool set, see `examples/tau2`). |
 | One event stream (`proactive-memory/event`) with per-consult tokens, latency and decisions, plus an optional JSONL trace of every prompt and reply. | Auxiliary calls never enter the session log, so a host's own metrics cannot see them: without this the arm has no cost accounting at all, and the prompt cannot be tuned. |
 | Rule R1 (never `agent.inject()`, never splice into a step that would not otherwise run) with an offline check: exactly one assistant message per user turn. | Manufacturing an extra model request would move reward for a reason that has nothing to do with memory. The rule is a ceiling, not a schedule: mid-turn steps, which the loop runs regardless, do carry a reminder. |
 

@@ -84,7 +84,7 @@ cd ../dsh-plugin-proactive-memory && npm install && cd -    # once
 | `--memory <arm>` | `off` | `PM_MODE` | `off \| always \| proactive \| proactive-nobank \| bankctx`; anything else is rejected by the script. |
 | `--memory-model <id>` | `deepseek/deepseek-v4-flash` | `PM_MODEL` | Memory model id. The provider is pinned to `openrouter` via `PM_PROVIDER`. |
 | `--memory-protocol <p>` | `text` | `PM_PROTOCOL` | `text` or `tools`. |
-| `--memory-interval <n>` | `1` | `PM_EVERY` | Consult every n-th counted step. |
+| `--memory-interval <n>` | `1` | `PM_EVERY` | Consult every n-th counted step. A counted step is one **model request**, mid-turn steps after a tool result included — a turn whose reply calls three tools is four steps — so `1` means one consult per executor call, not one per user turn. `2` halves the memory bill. |
 | — | — | `PM_WRITE_TOOLS` | The domain's gate tools, so the gate and the memory plugin share one definition of "a write". `run_eval.sh` computes it with `tau2_env.gate_tools()` for a non-`off` arm unless it is already set in the environment; an explicit empty value means `<recent_writes>` reads `unknown`. |
 | — | — | `PM_TRACE_DIR` | Set automatically for a non-`off` arm: `data/memory-trace/<--save-to>`, or a bare timestamp when `--save-to` is omitted. |
 | — | — | `PM_ALWAYS_TEXT` | Overrides the fixed reminder of `mode: always`. |
@@ -128,6 +128,37 @@ Per-simulation rows carry `mem_mode`, `mem_model`, `mem_protocol`, `mem_consults
 `trailing_violations` for any further slicing. The raw events stay in
 `AssistantMessage.raw_data.memory`, and every consult's prompt and reply is in
 `data/memory-trace/<run>/<session_id>.jsonl`.
+
+### What a healthy wiring looks like
+
+Numbers from **smoke runs** on retail (one or two tasks, one trial) — they check the plumbing, not
+the mechanism, and are not results:
+
+- **Cadence is 1:1 with model requests.** `--memory always` on one task: 10 model requests → 10
+  injects, one per assistant message, covering `(t1,s1) (t2,s1..s7) (t3,s1) (t3,s2)`. `--memory
+  proactive` on two tasks: 20 requests → 20 consult attempts, 10 per episode, well under
+  `maxCallsPerEpisode: 40`. If injects track *user turns* rather than requests, the cadence guard
+  has regressed — that is exactly the v0.1 bug.
+- **`R1 check` is zero.** `trailing_assistant_messages` was 1 on every segment of every run; the
+  report counts the segments above 1 and it must stay 0.
+- **`<recent_writes>` is populated and not `unknown`.** With `PM_WRITE_TOOLS` auto-filled (7 retail
+  write tools, printed in the `[run_eval.sh] memory write_tools=…` banner) the section carried the
+  executed call with its full arguments — e.g. `exchange_delivered_order_items {"item_ids":[…],
+  "order_id":"#W2378156", …}` — and read `(none)`, not `unknown`, on every other consult. `unknown`
+  everywhere means the env var never reached the plugin.
+- **Fail-open works.** One consult of 20 hit the 20 s deadline (`TimeoutError`); it was counted as
+  `mem_errors`, the step proceeded with no note, and the episode still scored 1.0. Consult latency
+  was mean 4.4 s / p95 10.6 s.
+- **Memory cost is not a rounding error at `every=1`.** Two episodes: memory $0.0031 against
+  executor $0.0049 — about 63% of the executor's bill, despite a far cheaper model, because every
+  consult re-sends a transcript window. `--memory-interval 2` is the first lever.
+- **`always` leaves `PM_TRACE_DIR` empty on disk.** The variable is still exported, but the arm makes
+  no consult, so the directory is never created. Expected, not a misconfiguration.
+- **The gate still sees the real user.** With `--gate g1 --memory always`, the confirm gate found
+  the user's affirmation and allowed the write (`checked=1 intercepted=0 allowed=1`) even with 10
+  plugin-injected `role: 'user'` reminders in the log — the `source.kind === 'user'` fix above. With
+  the gate off, the same task left its write unconfirmed: the reminder alone does not enforce
+  anything.
 
 ## 4. What to report
 

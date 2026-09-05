@@ -1,10 +1,14 @@
 # dsh-plugin-proactive-memory
 
 一个 [dsh](https://www.npmjs.com/package/@deepseek-ai/dsh) 插件。在**单个任务 episode 内**，一个便宜的
-"记忆模型"逐步旁观执行 agent。在执行 agent 每次模型请求之前，插件会
+"记忆模型"逐步旁观执行 agent。在**每一个 model step 之前**——一个用户 turn 的第一步，*以及*每一个跟在工具结果
+之后的 turn 中间的 step——插件会
 
 1. 维护一个执行 agent 看不见的私有记忆库 `{status, knowledge[], procedural[]}`；
-2. 决定闭嘴，或者在执行 agent 的下一次请求前面塞**一条**简短提醒。
+2. 决定闭嘴，或者在这一步的请求前面塞**一条**简短提醒。
+
+计量单位是一次模型请求，不是一个用户 turn：一个回复里连着调三次工具的 turn 是四个 step，也就是四个调度点。
+插件绝不会凭空造出一个 loop 本来不会跑的 step——它主动放过哪几种情形、为什么，见 [R1](#两条硬规则)。
 
 执行 agent 的系统提示、工具、解码全都不动，记忆模型自己的工具也从不注册进宿主的工具运行时。
 v0.1 没有跨 episode 持久化。
@@ -25,7 +29,8 @@ v0.1 没有跨 episode 持久化。
 每个臂都能把自己的 token 和延迟和 reward 并排报出来。真正的问题是：换一套 harness、换一个执行模型、
 换一个比论文便宜得多的记忆模型之后，这个效应还在不在。
 
-上面的数字是论文的、在论文的设置下测的。**本插件目前没有任何 benchmark 结果**，只有离线测试和一次脚本化冒烟。
+上面的数字是论文的、在论文的设置下测的。**本插件目前没有任何 benchmark 结果**：只有离线测试、一个脚本化 demo，
+以及在某个 τ²-bench harness 上的几条冒烟 episode——它们只核接线、节奏和成本记账，不测效果。
 
 ## 安装
 
@@ -70,6 +75,10 @@ dsh plugin add dsh-plugin-proactive-memory
 | `proactive-nobank` | 每个调度点 1 次 | 只做决定；不建库也不发库 | 只注入不建库（60.8） |
 | `bankctx` | 每个调度点 1 次 | 维护库，注入渲染后的整个库而不是精选提醒 | 全库塞上下文（58.6） |
 
+**调度点**就是一个计数 pre-step，而一个 pre-step 就是一次模型请求——turn 中间、跟在工具结果之后的 step 也算。
+所以默认的 `everySteps: 1` 下，要调模型的臂是每次模型请求一次 consult，而不是每个用户 turn 一次；
+`maxCallsPerEpisode` 是它的上限，想便宜一半就把 `everySteps` 调成 2。
+
 `always` 在记忆侧零成本，而论文里它与精选注入打平，先跑它，再考虑花钱的臂。
 `bankctx` 只在库相对上次注入**变过**时才注入——否则每一步都会原样重复同一块内容。
 
@@ -90,7 +99,7 @@ dsh plugin add dsh-plugin-proactive-memory
 | `model.maxTokens` | `512` | clamp 到 16–8192。`max-tokens` 结束算失败，不算正常停止（见下）。 |
 | `model.timeoutMs` | `20000` | 单次 consult 的截止时间，clamp 到 500–300000。超时则这一步原样放行。 |
 | `protocol` | `text` | `text`（一次往返的标签协议）或 `tools`（四个真实工具 schema）。 |
-| `schedule.firstStep` | `true` | 在 episode 的第一个计数 pre-step 上 consult。 |
+| `schedule.firstStep` | `true` | 在 episode 的第一个计数 pre-step 上 consult，也就是第 1 个 turn 的第 1 步。 |
 | `schedule.everySteps` | `1` | 之后每 n 个计数 pre-step consult 一次。clamp 到 1–1000。一个计数 pre-step 就是一次 model step，turn 中间那些也算。 |
 | `schedule.maxCallsPerEpisode` | `40` | 每个 episode 的记忆模型调用硬上限（只对要调模型的臂生效）。clamp 到 0–10000。 |
 | `window.messages` | `8` | 给记忆模型看的转录尾部条数，即论文的 k=8。clamp 到 1–200。 |
@@ -155,17 +164,32 @@ model step 之前，但绝不制造出一次 model step。`agent.inject()` 把�
 loop 只在 `turnEnds && nextStep.length === 0` 时才跳出 step 循环（`dsh-agent-loop:571`），于是本该
 结束的 turn 又多一次模型请求，一个用户 turn 出现两条 assistant 消息。凡是"decision 为空即结束
 turn"的位置，splice 都有同样的风险：`phase.step === 0` 时（`dsh-agent-loop:542-545`），以及
-`turnEnds` 已经置位之后（`:541`）。所以只要 `decision.kind === 'reject'`，或者 claimed 列表为空
-而这一步又不是 turn 中间的 step，本插件一律**原样返回**。
+`turnEnds` 已经置位之后（`:541`）。所以在一个 pre-step 上要问的从来不是"这一步是真的吗"，
+而是"我原样返回的话这一步还会不会跑"。
 
-**turn 中间的 step**（`step > 1`，因为上一条回复调了工具才走到这里）才是那个安全、而且以前被漏掉
-的情形：`step()` 已经把工具结果直接写进 session（`:685`）并返回 `null`，所以 `turnEnds` 是 `null`，
-不管 pre-step 返回什么这一步都会跑；那里 claimed 列表是空的，`decision.messages` 里至多只有一条
-runtime-context 消息。往里 splice 不会多出任何一次本来不存在的请求，提醒会在 `step/start` 处接在
-工具结果后面落进日志 —— 正是 dsh 自己那条 runtime-context 消息所在的位置。插件靠 session 日志区分
-两者：turn 中间 ⇔ 日志最后一条是工具结果（`role: 'user'`、`source.kind: 'tool'`）。v0.1 只看
-claimed 列表是否为空，于是每个 turn 第一步之后的所有 step 都被静默丢掉了：变成一个用户 turn 一次
-consult，而不是一次模型请求一次。
+本插件**原样返回**（不发事件、不 consult）的恰好是三种情形：
+
+| 放过的情形 | 为什么 |
+| --- | --- |
+| `decision.kind === 'reject'` | loop 根本没有要进入一个 step。 |
+| 一个 turn 的第 1 步，且没从信箱里 claim 到任何消息 | `:542-545` 会不发请求就结束这个 turn，往里塞消息等于凭空造一次请求。 |
+| turn 已经结束之后才走到的 pre-step —— 上一条回复没调工具，或者撞上了 max-tokens | 能走到这里只因为 `inbox.nextStep` 非空（steering、inject），而 `:541` 在 decision 为空时才 break；一 splice 就把一个已经结束的 turn 复活成第二条 assistant 消息。 |
+
+后两种在退出那行里计成 `guards`，不算 `skip` 事件：它们是一个 turn 的正常形状，不是异常。
+每个 turn 末尾那个被放过的 pre-step 就是这个计数的大头。
+
+**除此之外全都 splice**，包括 v0.1 弄错的那一种。**turn 中间的 step**（`step > 1`，因为上一条回复
+调了工具才走到这里）是安全的：`step()` 已经把工具结果直接写进 session（`:685`）并返回 `null`，所以
+`turnEnds` 是 `null`，`:541` 和 `:542-545` 都不可能触发，不管 pre-step 返回什么这一步都会跑。那里
+claimed 列表是空的，`decision.messages` 里至多只有一条 runtime-context 消息 —— 所以只看"claimed 是否
+为空"（v0.1 的做法）就会把每个 turn 第一步之后的所有 step 静默丢掉：变成一个**用户 turn** 一次
+consult，而不是一次**模型请求**一次，而且连个事件都不留。往里 splice 不会多出任何一次本来不存在的
+请求，提醒会在 `step/start` 处接在工具结果后面落进日志——正是 dsh 自己那条 runtime-context 消息所在
+的位置。
+
+插件靠 session 日志区分两者：turn 中间 ⇔ 日志最后一条是工具结果（`role: 'user'`、
+`source.kind: 'tool'`）。turn 结束之后日志最后一条是 assistant 回复——要么没有工具调用块，要么块被
+max-tokens 截在了任何结果之前——两种都不是工具结果消息，所以这个判断会正确地说"不是 turn 中间"。
 
 宿主仍然可以离线核这条规则：每个用户 turn 永远恰好一条 assistant 消息。
 
@@ -210,7 +234,8 @@ ctx.on('proactive-memory/event', e => { /* e.kind 是 consult | inject | skip | 
 
 插件退出时打一行：
 `[proactive-memory:<mode>] stats {"consults":…,"injects":…,"skips":…,"errors":…,"guards":…}`。
-`guards` 是被 R1 原样放行、一个事件都不发的 pre-step 数，绝大多数是每个 turn 的最后一步 —— 那一步本来就不会跑。
+`guards` 是被 R1 原样放行、一个事件都不发的 pre-step 数（它那张表的后两行），绝大多数是每个 turn 末尾那一步——
+那一步本来就不会跑。健康的话它大致是每个用户 turn 一次；而 `consults + skips` 是每次**模型请求**加一，那才是节奏。
 
 ## 轨迹格式
 
