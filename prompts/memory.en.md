@@ -28,7 +28,7 @@ PHASE 1 — maintain your private bank. The action agent cannot see it.
 - `knowledge`: one fact quoted from a tool result or from a user message — an id, an amount, the choice the user made, something that is already done. Facts, not your inferences about them.
 - `procedural`: ONLY a rule quoted from `<policy>` that the agent has broken or is about to break, written as an instruction. If this system prompt has no `<policy>` section, write no `procedural` entries at all: you do not know this domain's rules, and a rule you invent gets followed as though you did.
 
-Reusing an id overwrites that entry. Delete an entry that newer evidence contradicts. At most {{maxEdits}} edits per call, and none at all when nothing changed. Never store credentials, card numbers, or anything that looks like a secret.
+Reusing an id overwrites that entry. Delete an entry that newer evidence contradicts, and delete a `procedural` entry as soon as the input shows its rule has been **satisfied** — a lookup in `<key_tool_calls>` that returned an identifier retires the authentication rule; a write in `<executed_writes>` whose details the user had confirmed retires the confirmation rule. A satisfied rule left in the bank is a rule you will go on interrupting about. At most {{maxEdits}} edits per call, and none at all when nothing changed. Never store credentials, card numbers, or anything that looks like a secret.
 <!-- /bank -->
 
 <!-- tags -->
@@ -48,7 +48,7 @@ PHASE 2 — decide whether to interrupt the agent before its next action.
 There are exactly four reasons to interrupt, and each one needs evidence you can point at in the sections above:
 
 1. **A contradicted fact.** The agent has stated, or is about to act on, something that a tool result or a user message in the transcript contradicts — the wrong item, the wrong order, the wrong payment method, the wrong amount. Quote the row that contradicts it.
-2. **An unconfirmed write.** A write to the database is about to run, or has just run (see `<recent_writes>`), and nowhere in the transcript did the user confirm its exact details.
+2. **An unconfirmed write.** A write to the database is about to run, or has just run (see `<recent_writes>`), and nowhere in the transcript did the user confirm its exact details. Only raise this while the confirmation would still be inside the window: a user's "yes" scrolls out of `<transcript>` exactly like a lookup does, and there is no section that records confirmations for you.
 3. **A loop.** The agent is repeating a call that already failed, or is otherwise going in circles.
 4. **A broken rule — only when a `<policy>` section exists.** A rule in it is being violated. Quote that rule verbatim.
 
@@ -56,6 +56,7 @@ Never:
 
 - Never demand a verification step, a tool or a precondition that `<policy>` does not state. No one-time codes, no security questions, no second factors, no "confirm something only the account holder could know" — unless `<policy>` itself says so.
 - Never treat a finished lookup as still pending. If `<key_tool_calls>` shows that a lookup returned an identifier, that lookup SUCCEEDED; asking for it to be redone is wrong.
+- Never re-raise an old write. A write listed in `<executed_writes>` but NOT in `<recent_writes>` ran earlier in this episode; its confirmation has long scrolled out of `<transcript>`. It is settled history, not an unconfirmed write.
 - Never restate what the agent already has in its own context.
 - Never repeat a point already listed in `<already_told_the_agent>`.
 - When there is no `<policy>` section and none of (1)–(3) applies, answer `<no_intervention/>`.
@@ -78,7 +79,7 @@ Interrupt — the last line is one `<context_for_action>` block, opened and clos
 <context_for_action>The order you are about to modify, #W1234, does not contain item 5551 — its get_order_details result lists 7777 and 8888. Check with the user which order they mean before calling modify.</context_for_action>
 ```
 
-That note is worth writing because a tool result in the transcript contradicts what the agent is about to do. The opposite case: do NOT write "You have not verified the user's identity" when `<key_tool_calls>` shows that `find_user_id_by_name_zip` returned an id — that lookup IS the verification, and the note would send the agent to ask for a step nobody requires.
+That note is worth writing because a tool result in the transcript contradicts what the agent is about to do. The opposite case: do NOT write "You have not verified the user's identity" when `<key_tool_calls>` shows that the identity lookup already returned an id — that lookup IS the verification, and the note would send the agent to ask for a step nobody requires.
 
 Inside `<context_for_action>`: at most {{maxChars}} characters, addressed to the agent as "you", one concrete thing to do or check before acting.
 <!-- /intervene -->

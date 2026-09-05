@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { apply } from '../src/index.mjs'
+import { jaccard } from '../src/inject.mjs'
 import { assistantMsg, fakeAgent, makeCtx, pluginMsg, preStepOf, reminderIn, runPreStep, textChunks, textOf, toolChunks, toolMsg, userMsg } from './helpers.mjs'
 
 const ARM = { mode: 'proactive', model: { provider: 'openrouter', model: 'cheap' }, trace: { console: false } }
@@ -341,6 +342,26 @@ test('bankctx injects the rendered bank, and only when it changed', async () => 
 
   const c = await runPreStep(ctx, { agent, messages: [userMsg('3')], step: 3 })
   assert.ok(textOf(reminderIn(c)).includes('order W1 is delivered'))
+})
+
+// shouldInject is note-shaped: 12 injections an episode and Jaccard 0.8 over a bag of words. Two
+// successive whole-bank renders differ by one entry and overlap almost completely, so that gate
+// threw most bank updates away as 'dedupe' and then stopped the arm outright at the note budget —
+// in the one arm whose whole definition is "the full bank is in the executor's context".
+// `rendered !== state.lastBankRender` is bankctx's own dedupe, and it is the only one that applies.
+test('bankctx is not gated by the note budget or the note dedupe', async () => {
+  const ctx = makeCtx({
+    script: (_options, i) =>
+      textChunks(`<memory_save_knowledge id="k${i}">order W${i} is delivered and was paid by gift card</memory_save_knowledge>`),
+  })
+  apply(ctx, { ...ARM, mode: 'bankctx', intervention: { maxPerEpisode: 2, dedupeJaccard: 0.8 } })
+  const agent = fakeAgent()
+  for (let step = 1; step <= 6; step++) await runPreStep(ctx, { agent, messages: [userMsg(`m${step}`)], step })
+  assert.equal(of(ctx, 'inject').length, 6) // every render that moved reaches the executor
+  assert.deepEqual(of(ctx, 'skip'), [])
+  // and successive renders really are near-duplicates under the metric that used to drop them
+  const texts = of(ctx, 'inject').map(e => e.text)
+  assert.ok(jaccard(texts.at(-2), texts.at(-1)) >= 0.8, String(jaccard(texts.at(-2), texts.at(-1))))
 })
 
 test('proactive-nobank never sends a bank and never keeps one', async () => {

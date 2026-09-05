@@ -30,9 +30,9 @@ must be loud — while every out-of-range number is clamped rather than thrown.
 | `bank.maxProcedural` | `12` | Same for `procedural`. |
 | `bank.maxEditsPerCall` | `6` | Edits accepted per consult; the rest are dropped and reported as malformed. |
 | `intervention.maxChars` | `400` | The note is clipped at a word boundary to this length before framing. Clamped to 20–20000. |
-| `intervention.maxPerEpisode` | `12` | Injections per episode. Not applied to `always`. |
-| `intervention.dedupeJaccard` | `0.8` | A note whose Jaccard against any earlier note of this episode reaches this is suppressed (see [Dedupe](#dedupe)). Not applied to `always`. |
-| `bankctx.maxChars` | `1500` | Clip budget for the rendered bank in `mode: bankctx` only. Clamped to 20–20000. It is **not** `intervention.maxChars`: what that arm injects is a whole bank, not a one-line note. |
+| `intervention.maxPerEpisode` | `12` | Injections per episode. Not applied to `always` or `bankctx`. |
+| `intervention.dedupeJaccard` | `0.8` | A note whose Jaccard against any earlier note of this episode reaches this is suppressed (see [Dedupe](#dedupe)). Not applied to `always` or `bankctx`. |
+| `bankctx.maxChars` | `1500` | Clip budget for the rendered bank in `mode: bankctx` only. Clamped to 20–20000. It is **not** `intervention.maxChars`: what that arm injects is a whole bank, not a one-line note. Neither is its dedupe — see [Dedupe](#dedupe). |
 | `alwaysText` | a generic three-check reminder | The fixed reminder used by `mode: always`. Domain-free on purpose. |
 | `locale` | `en` | Picks `prompts/memory.<locale>.md` (`en` or `zh`). |
 | `promptFile` | `''` | Absolute path overriding the bundled prompt. |
@@ -153,6 +153,13 @@ twice), and it also scores some raw-token catches lower, since dropping the shar
 remaining difference weigh more. At the default `dedupeJaccard: 0.8` that is close to a wash (39
 pairs vs 41); **0.75 is the value at which the normalized bag catches every pair the raw one did,
 plus 11 more.** Worth setting deliberately rather than inheriting.
+
+Neither `always` nor `bankctx` goes through this gate, for opposite reasons. `always` injects the
+same fixed line at every step — that repetition *is* the arm. `bankctx` injects a whole rendered
+bank, and its dedupe is `rendered !== state.lastBankRender`: inject when the bank moved, otherwise
+skip with `why: 'dedupe'`. Two successive renders differ by one entry and overlap 85–95% as bags, so
+the note gate discarded most bank updates and then stopped the arm at `maxPerEpisode` — in the one
+arm whose whole definition is "the full bank is in the executor's context".
 
 ## Two hard rules
 
@@ -282,10 +289,14 @@ contain verbatim transcript excerpts, so treat the directory as user data.
 
 The memory model reads tool output verbatim and its output is concatenated into another agent's
 context. That is an injection-laundering path. `stripUnsafe()` removes framing the executor would
-read as structure (`<system-reminder>`, `<policy>`, `<instructions>`, tool-call and tool-result
-markup, the plugin's own `<memory_*>` / `<context_for_action>` tags, code fences); what survives is
-clipped to `intervention.maxChars` and escaped the way dsh escapes an instruction-frame body; a note
-that strips to nothing is dropped instead of injected.
+read as structure (`<system-reminder>`, `<instructions>`, tool-call and tool-result markup, the
+plugin's own `<memory_*>` / `<context_for_action>` tags, code fences) together with the body of
+those blocks. `<policy>` is the one tag that is *unwrapped* rather than deleted: the memory model's
+own system prompt renders the rules inside a literal `<policy>` block and then tells it to quote the
+rule verbatim, so deleting the block would delete the rule the note exists to carry. The structural
+tag still never reaches the executor. What survives is clipped to `intervention.maxChars` and escaped
+the way dsh escapes an instruction-frame body; a note that strips to nothing is dropped instead of
+injected.
 
 That is mechanical defense, not a sanitizer. In a benchmark the transcript is trusted data; in an
 adversarial deployment treat the note as untrusted, and do not point this plugin at a memory model

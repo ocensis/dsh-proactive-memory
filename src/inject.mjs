@@ -6,19 +6,29 @@
 
 const OPEN = '<system-reminder>'
 const CLOSE = '</system-reminder>'
-// Tags whose meaning belongs to the harness, not to a note. Both the block and stray tags go.
-const DANGEROUS = ['system-reminder', 'policy', 'instructions', 'tool_call', 'tool_result', 'function_calls', 'function_results', 'invoke', 'antml:invoke']
+// Tags whose meaning belongs to the harness, not to a note. Both the block and its body go: nothing
+// inside them is content the note was written to carry.
+const DANGEROUS = ['system-reminder', 'instructions', 'tool_call', 'tool_result', 'function_calls', 'function_results', 'invoke', 'antml:invoke']
+// `policy` is different: it is a frame the memory model is now told to quote OUT of — its own system
+// prompt renders the rules inside a literal <policy> block, PHASE 1 says procedural entries are
+// "quoted from <policy>", and PHASE 2's rule trigger says "quote that rule verbatim". A model that
+// mirrors the frame it was told to read would have the quoted rule — the entire payload of the note —
+// deleted along with the block. So unwrap instead of delete: the structural tag never reaches the
+// executor, the rule does.
+const UNWRAP = ['policy']
 
 const rx = (pattern, flags = 'gi') => new RegExp(pattern, flags)
+const esc = tag => tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** Remove framing a note must never carry into the executor's context. */
 export function stripUnsafe(note) {
   let s = String(note ?? '')
   for (const tag of DANGEROUS) {
-    const t = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const t = esc(tag)
     s = s.replace(rx(`<${t}\\b[^>]*>[\\s\\S]*?</${t}\\s*>`), ' ') // whole block
     s = s.replace(rx(`</?${t}\\b[^>]*>`), ' ') // stray open/close
   }
+  for (const tag of UNWRAP) s = s.replace(rx(`</?${esc(tag)}\\b[^>]*>`), ' ') // frame off, body kept
   s = s.replace(/<\/?(?:memory_[a-z_]+|no_intervention|context_for_action)\b[^>]*>/gi, ' ')
   s = s.replace(/```+/g, ' ') // code fences: the note is prose, never a block the model should copy
   return s.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()

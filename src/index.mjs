@@ -229,8 +229,17 @@ export function apply(ctx, config) {
       flushTrace(false)
       return decision
     }
-    if (cfg.mode !== 'always') {
-      // `always` deliberately ignores budget and dedupe: injecting the same line every step is the arm.
+    // Both `always` and `bankctx` skip this gate, for the same reason from opposite ends: it is
+    // shaped for one-line notes and neither arm injects one.
+    //   - `always` injects the same fixed line every step; that repetition IS the arm.
+    //   - `bankctx` injects a whole rendered bank, and `rendered !== state.lastBankRender` above is
+    //     already its correct dedupe. Two successive renders differ by one entry and overlap ~85-95%
+    //     as bags, so `intervention.dedupeJaccard` (0.8) discarded most bank updates as `dedupe`, and
+    //     `intervention.maxPerEpisode` (12) stopped the arm outright well before
+    //     `schedule.maxCallsPerEpisode` (40) — in the one arm whose whole definition is "the full
+    //     bank is in the executor's context". Worse, a suppressed render never updated
+    //     `lastBankRender`, so it was re-offered and re-suppressed every step after.
+    if (cfg.mode !== 'always' && cfg.mode !== 'bankctx') {
       const gate = shouldInject(state, note, cfg)
       if (!gate.ok) {
         stats.skips++
