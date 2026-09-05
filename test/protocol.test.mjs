@@ -134,3 +134,24 @@ test('tools protocol: gives up after maxRounds without inventing a decision', as
   assert.ok(out.malformed.some(m => m.includes('unparsable')))
   assert.ok(out.malformed.some(m => m.includes('2 rounds')))
 })
+
+// A dropped close tag mid-reply used to pair the opening with the NEXT entry's close tag: the
+// swallowed entry vanished, its raw markup was written into the first entry's content, and
+// `malformed` stayed empty, so nothing downstream could see the corruption.
+test('an unclosed opening tag is reported, and the entry it swallowed still lands', () => {
+  const r = parseTextReply(
+    '<memory_save_knowledge id="k1">user is Yusuf<memory_save_knowledge id="k2">order #W123 is delivered</memory_save_knowledge><no_intervention/>',
+  )
+  assert.deepEqual(r.edits, [{ op: 'save_knowledge', id: 'k2', content: 'order #W123 is delivered' }])
+  assert.deepEqual(r.malformed, ['unclosed <memory_save_knowledge>'])
+  assert.equal(r.intervention, null)
+  for (const e of r.edits) assert.ok(!String(e.content ?? '').includes('<memory_'))
+})
+
+test('an unclosed opening tag across ops keeps the well-formed entry', () => {
+  const r = parseTextReply(
+    '<memory_save_knowledge id="k1">text<memory_save_procedural id="p1">rule</memory_save_procedural><no_intervention/>',
+  )
+  assert.deepEqual(r.edits, [{ op: 'save_procedural', id: 'p1', content: 'rule' }])
+  assert.deepEqual(r.malformed, ['unclosed <memory_save_knowledge>'])
+})

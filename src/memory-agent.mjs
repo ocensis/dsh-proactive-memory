@@ -111,8 +111,17 @@ export async function consult(ctx, cfg, state, input, signal) {
       raw: out.text,
     }
   }
-  if (parsed.finish?.kind === 'error' || parsed.finish?.kind === 'aborted') {
-    throw new Error(`memory model finished ${parsed.finish.kind}: ${parsed.finish.failure?.message ?? 'unknown'}`)
+  // Terminal finishes, following dsh's own auxiliary-call convention (dsh-session-title-llm's
+  // finishError). `max-tokens` belongs here: a truncated reply loses the closing tags the parser
+  // needs (an unterminated <context_for_action> never matches, so a real intervention would be
+  // recorded as a deliberate `no_intervention`), and under the tools protocol BlockAssembler drops
+  // every tool-call block outright, so that round's bank edits would vanish unreported. Throwing
+  // lands it on the caller's fail-open + `error` event path instead. `tool-calls` is NOT terminal
+  // here: it is the normal continuation inside runToolsProtocol.
+  if (parsed.finish?.kind === 'error' || parsed.finish?.kind === 'aborted' || parsed.finish?.kind === 'max-tokens') {
+    const why = parsed.finish.failure?.message
+      ?? (parsed.finish.kind === 'max-tokens' ? `reply truncated at maxTokens=${cfg.model.maxTokens}` : 'unknown')
+    throw new Error(`memory model finished ${parsed.finish.kind}: ${why}`)
   }
 
   const { applied, rejected } = applyEdits(state.bank, parsed.edits, cfg.bank)

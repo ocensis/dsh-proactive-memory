@@ -87,6 +87,11 @@ trace: { dir: '', console: true }
 pre-step 监听器里 `await next()` 之后的一切都包在 `try/catch` 里。超时、provider 报错、回复畸形、
 乃至本插件自己的 bug，都返回原来的 decision。**记忆永远不能弄挂一个 turn。**
 
+`max-tokens` 也算失败，不算正常结束：回复被截断就丢了解析要用的闭合标签，模型正写到一半的建议
+会被当成它主动选择了 `<no_intervention/>`（`protocol: tools` 下更糟，截断那轮的 tool-call 块会被
+`BlockAssembler` 直接丢掉，那轮的改库也就没了）。所以它走 `error` 事件；一跑里这种错很多就把
+`model.maxTokens` 调大。
+
 ## 注入的消息
 
 ```

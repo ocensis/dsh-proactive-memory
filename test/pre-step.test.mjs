@@ -137,6 +137,32 @@ test('a terminal finish reason is an error, not a silent no-op', async () => {
   assert.ok(of(ctx, 'error')[0].message.includes('rate limited'))
 })
 
+// A truncated reply loses the closing tags the parser needs, so the intervention the model was in
+// the middle of writing would parse as a deliberate `<no_intervention/>` — an arm that ran out of
+// output budget would then report as an arm that chose silence. It must be an error instead.
+// (Under the tools protocol it is worse: BlockAssembler drops the tool-call blocks on max-tokens,
+// so that round's bank edits would disappear with no signal at all.)
+test('a max-tokens (truncated) reply is an error, not a fake no_intervention', async () => {
+  const truncated = '<memory_save_knowledge id="k1">user is Yusuf</memory_save_knowledge>\n'
+    + '<context_for_action>You are about to run return_delivered_order_items'
+  const ctx = makeCtx({
+    script: [[
+      { type: 'block-start', index: 0, blockType: 'text' },
+      { type: 'text-delta', index: 0, text: truncated },
+      { type: 'usage', usage: { inputTokens: 100, outputTokens: 512 } },
+      { type: 'finish', reason: { kind: 'max-tokens' } },
+    ]],
+  })
+  apply(ctx, ARM)
+  const claimed = [userMsg('hi')]
+  const base = { kind: 'enter', messages: [...claimed] }
+  const out = await runPreStep(ctx, { agent: fakeAgent(), messages: claimed, decision: base })
+  assert.equal(out, base) // still fails open: memory never breaks a turn
+  assert.deepEqual(kinds(ctx), ['error']) // and never a consult event with decision=no_intervention
+  assert.match(of(ctx, 'error')[0].message, /max-tokens/)
+  assert.match(of(ctx, 'error')[0].message, /maxTokens=/)
+})
+
 test('mode=always injects the fixed text with zero model calls', async () => {
   const ctx = makeCtx()
   apply(ctx, { mode: 'always', trace: { console: false }, alwaysText: 'CHECK YOURSELF' })

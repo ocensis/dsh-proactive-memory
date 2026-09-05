@@ -92,6 +92,12 @@ Everything after `await next()` in the pre-step listener is wrapped in `try/catc
 provider error, a malformed reply, or a bug in this plugin returns the original decision. **Memory
 must never be able to break a turn.**
 
+A `max-tokens` finish counts as a failure too, not as a normal stop: a truncated reply loses the
+closing tags the parser needs, so a note the model was still writing would otherwise be recorded as
+a deliberate `<no_intervention/>` (and under `protocol: tools` the truncated round's tool-call
+blocks are dropped by `BlockAssembler`, losing its bank edits). It raises an `error` event instead —
+if a run shows many of those, raise `model.maxTokens`.
+
 ## The injected message
 
 ```
