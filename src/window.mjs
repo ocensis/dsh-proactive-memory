@@ -6,13 +6,29 @@
 
 export const PLUGIN = 'proactive-memory'
 
-/** Middle-truncate, marking how much was removed. */
-export function middleTruncate(s, max) {
+/**
+ * The note a truncated **tool result** carries inside its marker — and nothing else does.
+ *
+ * A bare `[N chars cut]` says that something was removed; it does not say that what was removed may
+ * be exactly the row being looked for. The pilot measured the difference: 8 of 33 notes claimed that
+ * an id was ABSENT from a tool result, and several of those results had simply been cut through the
+ * middle of the list the claim was about (a retail `get_product_details` runs to ~3.4k chars, and the
+ * budget was 800). Absence is the one thing a middle-truncated result can never show.
+ */
+export const TOOL_RESULT_CUT_NOTE = 'result truncated, do not infer absence'
+
+/**
+ * Middle-truncate, marking how much was removed. `note`, when given, is spelled out inside that
+ * marker; pass TOOL_RESULT_CUT_NOTE for a tool result, and nothing for arguments and one-line
+ * summaries, where the extra words would eat most of a small budget.
+ */
+export function middleTruncate(s, max, note = '') {
   const text = String(s ?? '')
   if (text.length <= max) return text
   const head = Math.max(1, Math.floor(max / 2))
   const tail = Math.max(1, max - head)
-  return `${text.slice(0, head)}…[${text.length - max} chars cut]…${text.slice(text.length - tail)}`
+  const marker = `…[${text.length - max} chars cut${note ? ` — ${note}` : ''}]…`
+  return `${text.slice(0, head)}${marker}${text.slice(text.length - tail)}`
 }
 
 /** `<key_tool_calls>` budgets. Fixed, not configurable: one short line per call is the whole point. */
@@ -55,7 +71,10 @@ function serialize(m, cfg) {
     out.tool_calls = calls.map(c => ({ name: c.name, arguments: middleTruncate(c.arguments ?? '', cfg.window.argChars) }))
   }
   if (result) {
-    out.tool_result = { text: middleTruncate(resultText(result), cfg.window.toolResultChars), is_error: Boolean(result.isError) }
+    out.tool_result = {
+      text: middleTruncate(resultText(result), cfg.window.toolResultChars, TOOL_RESULT_CUT_NOTE),
+      is_error: Boolean(result.isError),
+    }
   }
   return out
 }

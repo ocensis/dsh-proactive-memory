@@ -24,7 +24,7 @@ must be loud — while every out-of-range number is clamped rather than thrown.
 | `schedule.everySteps` | `1` | Consult every n-th counted pre-step after that. Clamped to 1–1000. One counted pre-step is one model step, mid-turn steps included. |
 | `schedule.maxCallsPerEpisode` | `40` | Hard cap on memory-model calls per episode (model-calling arms only). Clamped to 0–10000. |
 | `window.messages` | `8` | Transcript tail shown to the memory model — the paper's k=8. Clamped to 1–200. |
-| `window.toolResultChars` | `800` | Middle-truncation budget for each message text and tool result. |
+| `window.toolResultChars` | `4000` | Middle-truncation budget for each message text and tool result. Clamped to 40–100000. Raised from 800 so that a whole retail tool result fits — see [Truncation is not absence](#truncation-is-not-absence). |
 | `window.argChars` | `400` | Middle-truncation budget for tool-call arguments. |
 | `bank.maxKnowledge` | `12` | Cap on `knowledge` entries; over the cap the oldest is dropped and reported. |
 | `bank.maxProcedural` | `12` | Same for `procedural`. |
@@ -65,6 +65,33 @@ pilot the authentication lookup scrolled out of the last 8 messages and the memo
 rest of the episode demanding authentication that had already succeeded — 31 of 40 injected notes in
 the `proactive` arm. A tool result also serialises as a bare string (`"mei_kovacs_8020"`), so the
 prompt is explicit about what one means: *a returned identifier means that lookup succeeded.*
+
+### Truncation is not absence
+
+`window.toolResultChars` is **4000**, not the 800 the second pilot ran with, and a truncated tool
+result now says more than how much was cut:
+
+```
+…[1873 chars cut — result truncated, do not infer absence]…
+```
+
+The second 40-task retail pilot fixed the identity nag and hit a different wall: of its 33 injected
+notes, 8 told the executor that some id was **absent** from a tool result, and several of those were
+false — an item the note said was not a Desk Lamp variant is one of that product's 12 variants, an
+order the note said did not contain a Water Bottle contains one. The mechanism was this budget. A
+retail `get_product_details` payload is ~1.9k chars at the median and 3.4k at the tail, so at 800 the
+middle of every variant list was replaced by `…[N chars cut]…` — and the memory model read the gap as
+a short list rather than a cut one. A middle-truncated result is the one shape of evidence from which
+absence can never be read, and a bare byte count does not say so.
+
+So: tool results arrive whole (4000 clears the largest record in the retail db, a 3.4k product; raise
+it for a domain with larger results — the field clamps at 100000), the marker on the ones still cut
+spells out what it means, and the prompt carries the rule in its `Never` list: never conclude that an
+id, an item, a variant or an order is missing from a result carrying that marker, and quote the list
+you checked when claiming absence from one that has no marker. Only tool results carry the long marker;
+arguments, `<key_tool_calls>` lines and `<executed_writes>` lines keep the terse `…[N chars cut]…`,
+where the extra words would eat most of a 200–400 char budget. `window.argChars` stays at 400: a call
+argument the memory model cannot read in full is a nuisance, not a false fact.
 
 ### The policy
 

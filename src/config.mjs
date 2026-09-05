@@ -32,7 +32,11 @@ export const Config = z.object({
   }),
   window: z.object({
     messages: z.number().default(8),
-    toolResultChars: z.number().default(800),
+    // 4000, not the pilot's 800: a retail `get_product_details` result is 2.0k chars median and 3.4k
+    // at the tail, so 800 cut the middle out of every variant list — and the memory model read the
+    // gap as an absence, telling the agent an item "is not" a variant of a product it IS a variant
+    // of. Tool results have to arrive whole; arguments do not, so `argChars` stays at 400.
+    toolResultChars: z.number().default(4000),
     argChars: z.number().default(400),
   }),
   bank: z.object({
@@ -84,7 +88,7 @@ export function resolveConfig(raw) {
   cfg.schedule.everySteps = clampInt(cfg.schedule.everySteps, 1, 1000, 1)
   cfg.schedule.maxCallsPerEpisode = clampInt(cfg.schedule.maxCallsPerEpisode, 0, 10000, 40)
   cfg.window.messages = clampInt(cfg.window.messages, 1, 200, 8)
-  cfg.window.toolResultChars = clampInt(cfg.window.toolResultChars, 40, 100000, 800)
+  cfg.window.toolResultChars = clampInt(cfg.window.toolResultChars, 40, 100000, 4000)
   cfg.window.argChars = clampInt(cfg.window.argChars, 40, 100000, 400)
   cfg.bank.maxKnowledge = clampInt(cfg.bank.maxKnowledge, 0, 200, 12)
   cfg.bank.maxProcedural = clampInt(cfg.bank.maxProcedural, 0, 200, 12)

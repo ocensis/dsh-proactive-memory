@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildWindow, middleTruncate } from '../src/window.mjs'
+import { TOOL_RESULT_CUT_NOTE, buildWindow, middleTruncate } from '../src/window.mjs'
 import { assistantMsg, cfg, pluginMsg, toolMsg, userMsg } from './helpers.mjs'
 
 test('keeps only the tail of the transcript', () => {
@@ -52,6 +52,25 @@ test('tool calls and results are serialized and middle-truncated', () => {
   assert.ok(transcript[1].tool_result.text.includes('chars cut'))
 })
 
+test('only a truncated tool result says that a truncation is not an absence', () => {
+  const c = cfg({ window: { toolResultChars: 60, argChars: 40 } })
+  const long = 'x'.repeat(500)
+  const derived = [
+    assistantMsg(long, [{ name: 'get_product_details', arguments: JSON.stringify({ id: long }) }]),
+    toolMsg('c0', long),
+  ]
+  const { transcript } = buildWindow(derived, [], c)
+  // the marker the memory model is told to read as "the middle was cut, absence proves nothing"
+  assert.ok(transcript[1].tool_result.text.includes(`chars cut — ${TOOL_RESULT_CUT_NOTE}`))
+  // …and nothing else carries it: an argument or a message text truncated the same way stays terse
+  assert.ok(!transcript[0].tool_calls[0].arguments.includes(TOOL_RESULT_CUT_NOTE))
+  assert.ok(transcript[0].tool_calls[0].arguments.includes('chars cut'))
+  assert.ok(!transcript[0].text.includes(TOOL_RESULT_CUT_NOTE))
+  // an untruncated result is left exactly as the tool returned it, marker-free
+  const { transcript: whole } = buildWindow([toolMsg('c1', 'item_ids: 7777, 8888')], [], c)
+  assert.equal(whole[0].tool_result.text, 'item_ids: 7777, 8888')
+})
+
 test('empty messages are dropped and the result is JSON-framable', () => {
   const derived = [assistantMsg(''), userMsg('real')]
   const { transcript } = buildWindow(derived, [], cfg())
@@ -65,4 +84,8 @@ test('middleTruncate keeps both ends and says how much it cut', () => {
   assert.ok(out.startsWith('abcdefghij'))
   assert.ok(out.endsWith('bcdefghij'))
   assert.ok(out.includes('[80 chars cut]'))
+  // the note goes inside the marker, and only when one is asked for
+  const noted = middleTruncate('abcdefghij'.repeat(10), 20, TOOL_RESULT_CUT_NOTE)
+  assert.ok(noted.includes('[80 chars cut — result truncated, do not infer absence]'))
+  assert.equal(middleTruncate('short', 10, TOOL_RESULT_CUT_NOTE), 'short')
 })

@@ -13,6 +13,10 @@ test('defaults are off and safe', () => {
   assert.equal(c.model.provider, '')
   assert.equal(c.schedule.everySteps, 1)
   assert.equal(c.window.messages, 8)
+  // 4000, not the pilot's 800: a retail tool result runs to ~3.4k chars, and a result cut through
+  // the middle is what the memory model kept reading as "that id is not in there".
+  assert.equal(c.window.toolResultChars, 4000)
+  assert.equal(c.window.argChars, 400)
   assert.equal(c.intervention.dedupeJaccard, 0.8)
   assert.equal(c.alwaysText, DEFAULT_ALWAYS_TEXT)
   assert.deepEqual(c.writeTools, [])
@@ -39,6 +43,10 @@ test('an unknown arm is loud, out-of-range numbers are clamped', () => {
   assert.equal(c.schedule.everySteps, 1)
   assert.equal(c.window.messages, 1)
   assert.equal(c.intervention.dedupeJaccard, 1)
+  // a domain with results larger than the default must be able to raise the budget, not be clamped
+  // back down to it: whole tool results are the whole point of the field.
+  assert.equal(resolveConfig({ window: { toolResultChars: 20000 } }).window.toolResultChars, 20000)
+  assert.equal(resolveConfig({ window: { toolResultChars: 0 } }).window.toolResultChars, 40)
 })
 
 test('firstStep, everySteps and maxCallsPerEpisode define the schedule', () => {
@@ -102,6 +110,25 @@ test('PHASE 2 names four triggers and forbids the invented-precondition nag', ()
   const zh = loadPrompt(resolveConfig({ mode: 'proactive', model: { provider: 'p', model: 'm' }, locale: 'zh' }))
   assert.ok(zh.includes('只有四条'))
   assert.ok(zh.includes('不要**再写"你还没核验用户身份"') || zh.includes('就**不要**再写"你还没核验用户身份"'))
+})
+
+test('a truncated tool result is never evidence of absence, in either language', () => {
+  const base = { mode: 'proactive', model: { provider: 'p', model: 'm' } }
+  const en = loadPrompt(resolveConfig(base))
+  // the marker itself, so the model can recognise it in the transcript…
+  assert.ok(en.includes('chars cut — result truncated, do not infer absence'))
+  // …the rule, in the Never list…
+  assert.ok(en.includes('Never read a truncation as an absence'))
+  assert.ok(/Never conclude from such a result that an id, an item, a variant or an order is NOT there/.test(en))
+  // …and the standard for the absence claims that are still allowed
+  assert.ok(en.includes('quote the list you checked'))
+  assert.ok(en.includes('Every absence claim rests on the full list behind it'))
+
+  const zh = loadPrompt(resolveConfig({ ...base, locale: 'zh' }))
+  assert.ok(zh.includes('chars cut — result truncated, do not infer absence'))
+  assert.ok(zh.includes('绝不把"被截断"当成"不存在"'))
+  assert.ok(zh.includes('把你据以判断的那份清单原样引出来'))
+  assert.ok(zh.includes('都只值它背后那份完整清单的分量'))
 })
 
 test('the policy region appears only when a policy was read, and is substituted verbatim', async () => {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-proactive-memory",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A dsh plugin: a cheap memory model watches the agent step by step inside one task and splices at most one short reminder in front of the next model request. Ablation arms mirror the Proactive Memory paper (arXiv 2607.08716).",
   "license": "MIT",
   "type": "module",
