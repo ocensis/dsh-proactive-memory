@@ -9,7 +9,7 @@ the **plugin** repo is required once (Node resolves its bare imports from its re
 ```
 tau2/
   tau2-dsh-exp/                    the harness (bridge, profiles, run_eval.sh)
-  dsh-plugin-proactive-memory/     this repo — cd here and `npm install` once
+  dsh-proactive-memory/     this repo — cd here and `npm install` once
 ```
 
 ## 1. Mount it
@@ -19,7 +19,7 @@ write-confirmation gate and **before** the bridge plugin that drives the loop:
 
 ```yaml
     - id: proactive-memory
-      name: '../../../../dsh-plugin-proactive-memory/src/index.mjs'
+      name: '../../../../dsh-proactive-memory/src/index.mjs'
       disabled: !!js (process.env.PM_MODE ?? 'off') === 'off'
       config:
         mode: !!js process.env.PM_MODE || 'off'
@@ -70,7 +70,7 @@ Events go into the per-session mailbox, ride along with the `/step` response, an
 ## 2. Run an arm
 
 ```bash
-cd ../dsh-plugin-proactive-memory && npm install && cd -    # once
+cd ../dsh-proactive-memory && npm install && cd -    # once
 
 ./run_eval.sh --num-tasks 20 --trials 1 --gate off --memory off       --save-to base_off
 ./run_eval.sh --num-tasks 20 --trials 1 --gate off --memory always    --save-to mem_always

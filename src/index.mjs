@@ -1,4 +1,4 @@
-// dsh-plugin-proactive-memory — one injection path, one auxiliary model call, one episode-scoped bank.
+// dsh-proactive-memory — one injection path, one auxiliary model call, one episode-scoped bank.
 //
 // The pre-step listener below is the whole plugin. It runs inside the agent loop's waterfall, so a
 // throw there kills a turn: everything after next() is wrapped, and every failure returns the
