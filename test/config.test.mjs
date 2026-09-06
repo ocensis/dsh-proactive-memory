@@ -24,6 +24,8 @@ test('defaults are off and safe', () => {
   assert.equal(c.policyFile, '')
   assert.equal(c.bankctx.maxChars, 1500)
   assert.equal(c.model.reasoningEffort, '')
+  assert.equal(c.window.keyToolResultChars, 600)
+  assert.equal(resolveConfig({ window: { keyToolResultChars: 5 } }).window.keyToolResultChars, 40)
   assert.equal(resolveConfig({ model: { reasoningEffort: 'low' } }).model.reasoningEffort, 'low')
   assert.equal(c.trace.dir, '')
 })

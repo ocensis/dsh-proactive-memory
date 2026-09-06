@@ -39,6 +39,7 @@ export const Config = z.object({
     // of. Tool results have to arrive whole; arguments do not, so `argChars` stays at 400.
     toolResultChars: z.number().default(4000),
     argChars: z.number().default(400),
+    keyToolResultChars: z.number().default(600).description('clip for each <key_tool_calls> result line'),
   }),
   bank: z.object({
     maxKnowledge: z.number().default(12),
@@ -91,6 +92,7 @@ export function resolveConfig(raw) {
   cfg.window.messages = clampInt(cfg.window.messages, 1, 200, 8)
   cfg.window.toolResultChars = clampInt(cfg.window.toolResultChars, 40, 100000, 4000)
   cfg.window.argChars = clampInt(cfg.window.argChars, 40, 100000, 400)
+  cfg.window.keyToolResultChars = clampInt(cfg.window.keyToolResultChars, 40, 20000, 600)
   cfg.bank.maxKnowledge = clampInt(cfg.bank.maxKnowledge, 0, 200, 12)
   cfg.bank.maxProcedural = clampInt(cfg.bank.maxProcedural, 0, 200, 12)
   cfg.bank.maxEditsPerCall = clampInt(cfg.bank.maxEditsPerCall, 0, 100, 6)

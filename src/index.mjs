@@ -323,7 +323,7 @@ export function apply(ctx, config) {
           .filter(b => b?.type === 'text').map(b => b.text ?? '').join('\n')
         state.keyToolCalls.push(formatKeyToolCall({
           name: exec.name, args: exec.arguments, result: text, isError: Boolean(result?.isError),
-        }))
+        }, { resultChars: cfg.window.keyToolResultChars }))
         capOldest(state.keyToolCalls, MAX_KEY_TOOL_CALLS)
       }
     } catch { /* observation only */ }

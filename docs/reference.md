@@ -27,6 +27,7 @@ must be loud — while every out-of-range number is clamped rather than thrown.
 | `window.messages` | `8` | Transcript tail shown to the memory model — the paper's k=8. Clamped to 1–200. |
 | `window.toolResultChars` | `4000` | Middle-truncation budget for each message text and tool result. Clamped to 40–100000. Raised from 800 so that a whole retail tool result fits — see [Truncation is not absence](#truncation-is-not-absence). |
 | `window.argChars` | `400` | Middle-truncation budget for tool-call arguments. |
+| `window.keyToolResultChars` | `600` | Clip for each `<key_tool_calls>` result line. Retail lookups return a bare id; banking lookups return a customer record of 250-480 chars, which must arrive whole. Clamped to 40-20000. |
 | `bank.maxKnowledge` | `12` | Cap on `knowledge` entries; over the cap the oldest is dropped and reported. |
 | `bank.maxProcedural` | `12` | Same for `procedural`. |
 | `bank.maxEditsPerCall` | `6` | Edits accepted per consult; the rest are dropped and reported as malformed. |

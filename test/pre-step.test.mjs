@@ -516,14 +516,14 @@ test('a failed key tool call is marked, and long values are truncated', async ()
   const onResult = ctx.listeners.get('tools/result')[0]
   onResult(
     { agent, name: 'find_user_id_by_email', arguments: { email: 'x'.repeat(500) } },
-    { isError: true, content: [{ type: 'text', text: `Error: user not found\n${'y'.repeat(500)}` }] },
+    { isError: true, content: [{ type: 'text', text: `Error: user not found\n${'y'.repeat(1500)}` }] },
   )
   await runPreStep(ctx, { agent, messages: [userMsg('again')], step: 2 })
   const line = /<key_tool_calls>\n- (.*)\n<\/key_tool_calls>/.exec(textOf(ctx.calls[1].messages[0]))[1]
   assert.ok(line.startsWith('find_user_id_by_email({"email":"xxx'))
   assert.ok(line.endsWith('[error]'), line)
   assert.ok(line.includes('chars cut'))
-  assert.ok(line.length < 600, String(line.length))
+  assert.ok(line.length < 300 + 600 + 120, String(line.length)) // arg clip 300 + result clip 600 (window.keyToolResultChars) + markers
   assert.equal(line.split('\n').length, 1) // never breaks the one-line-per-call shape
 })
 

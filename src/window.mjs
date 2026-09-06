@@ -33,7 +33,7 @@ export function middleTruncate(s, max, note = '') {
 
 /** `<key_tool_calls>` budgets. Fixed, not configurable: one short line per call is the whole point. */
 export const KEY_TOOL_ARG_CHARS = 300
-export const KEY_TOOL_RESULT_CHARS = 200
+export const KEY_TOOL_RESULT_CHARS = 600
 
 const oneLine = s => String(s ?? '').replace(/\s+/g, ' ').trim()
 
@@ -44,9 +44,11 @@ const oneLine = s => String(s ?? '').replace(/\s+/g, ' ').trim()
  * still sees that a lookup returned an id long after that exchange scrolled out of the transcript
  * window — the gap that had it demanding authentication the agent had already done.
  */
-export function formatKeyToolCall({ name, args, result, isError }) {
+export function formatKeyToolCall({ name, args, result, isError }, { resultChars = KEY_TOOL_RESULT_CHARS } = {}) {
   const argText = middleTruncate(oneLine(typeof args === 'string' ? args : JSON.stringify(args ?? {})), KEY_TOOL_ARG_CHARS)
-  const resultText = middleTruncate(oneLine(result), KEY_TOOL_RESULT_CHARS) || '(no text)'
+  // A lookup that returns a whole customer record (banking: ~250-480 chars) must survive uncut, or the
+  // memory model cannot tell which of the record's fields the user actually got right.
+  const resultText = middleTruncate(oneLine(result), resultChars) || '(no text)'
   return `${name}(${argText}) -> ${resultText}${isError ? ' [error]' : ''}`
 }
 
