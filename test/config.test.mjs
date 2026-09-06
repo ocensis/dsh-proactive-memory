@@ -116,6 +116,13 @@ test('PHASE 2 names four triggers and forbids the invented-precondition nag', ()
   assert.ok(zh.includes('不要**再写"你还没核验用户身份"') || zh.includes('就**不要**再写"你还没核验用户身份"'))
 })
 
+test('the memory model is told the cut is in its own copy, never the agent\'s', () => {
+  for (const locale of ['en', 'zh']) {
+    const full = loadPrompt(resolveConfig({ mode: 'proactive', locale }), false)
+    assert.ok(locale === 'en' ? full.includes('The cut is in YOUR copy only') : full.includes('截断只发生在你这一份副本上'), locale)
+  }
+})
+
 test('a truncated tool result is never evidence of absence, in either language', () => {
   const base = { mode: 'proactive', model: { provider: 'p', model: 'm' } }
   const en = loadPrompt(resolveConfig(base))
