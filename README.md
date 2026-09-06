@@ -15,7 +15,7 @@ user message ──► dsh turn loop
                    ├─ agent/pre-step ──► proactive-memory
                    │                      1. inputs  = last 8 logged messages (+ what this step claimed)
                    │                                   + this episode's key tool calls and writes, window or not
-                   │                      2. consult = memory model (ctx.llm.stream, e.g. deepseek-v4-flash)
+                   │                      2. consult = memory model (ctx.llm.stream, e.g. deepseek-v4-flash-0731)
                    │                           system prompt: the domain <policy>, its only source of rules
                    │                           phase 1: edit its private bank {status, knowledge[], procedural[]}
                    │                           phase 2: <no_intervention/> | <context_for_action>note</context_for_action>
@@ -67,7 +67,7 @@ before the plugin that drives the loop:
       name: '../../path/to/dsh-proactive-memory/src/index.mjs'
       config:
         mode: proactive
-        model: { provider: openrouter, model: deepseek/deepseek-v4-flash }
+        model: { provider: openrouter, model: deepseek/deepseek-v4-flash-0731 }
         policyFile: /abs/path/to/policy.md                                   # the ONLY source of rules the memory model gets
         keyTools: [find_user_id_by_email, find_user_id_by_name_zip]          # calls whose result outlives the window
         writeTools: [cancel_pending_order, exchange_delivered_order_items]   # what counts as a write

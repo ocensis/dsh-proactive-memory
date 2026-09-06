@@ -14,7 +14,7 @@ agent，在每个模型步之前决定要不要往执行模型的上下文里塞
               ├─ agent/pre-step ──► proactive-memory
               │                      1. 输入   = 日志里最近 8 条消息（加上这一步刚 claim 到的）
               │                                 + 这一集的关键工具调用和写操作，不受窗口限制
-              │                      2. 咨询   = 记忆模型（ctx.llm.stream，例如 deepseek-v4-flash）
+              │                      2. 咨询   = 记忆模型（ctx.llm.stream，例如 deepseek-v4-flash-0731）
               │                           系统提示里带着领域 <policy>，那是它唯一的规则来源
               │                           阶段 1：改自己的私有库 {status, knowledge[], procedural[]}
               │                           阶段 2：<no_intervention/> 或 <context_for_action>提醒</context_for_action>
@@ -63,7 +63,7 @@ npm run demo   # 一段脚本化的 episode：咨询、库编辑、注入的提�
       name: '../../path/to/dsh-proactive-memory/src/index.mjs'
       config:
         mode: proactive
-        model: { provider: openrouter, model: deepseek/deepseek-v4-flash }
+        model: { provider: openrouter, model: deepseek/deepseek-v4-flash-0731 }
         policyFile: /abs/path/to/policy.md                                   # 记忆模型唯一的规则来源
         keyTools: [find_user_id_by_email, find_user_id_by_name_zip]          # 结果要跨窗口一直留着的调用
         writeTools: [cancel_pending_order, exchange_delivered_order_items]   # 哪些工具算"写"

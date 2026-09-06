@@ -25,7 +25,7 @@ write-confirmation gate and **before** the bridge plugin that drives the loop:
         mode: !!js process.env.PM_MODE || 'off'
         model:
           provider: !!js process.env.PM_PROVIDER || 'openrouter'
-          model: !!js process.env.PM_MODEL || 'deepseek/deepseek-v4-flash'
+          model: !!js process.env.PM_MODEL || 'deepseek/deepseek-v4-flash-0731'
           temperature: 0
           maxTokens: 512
           # 45 s, not the package default of 20 s: the provider's latency tail, not the model,
@@ -88,7 +88,7 @@ cd ../dsh-proactive-memory && npm install && cd -    # once
 | flag | default | env it exports | meaning |
 | --- | --- | --- | --- |
 | `--memory <arm>` | `off` | `PM_MODE` | `off \| always \| proactive \| proactive-nobank \| bankctx`; anything else is rejected by the script. |
-| `--memory-model <id>` | `deepseek/deepseek-v4-flash` | `PM_MODEL` | Memory model id. The provider is pinned to `openrouter` via `PM_PROVIDER`. |
+| `--memory-model <id>` | `deepseek/deepseek-v4-flash-0731` | `PM_MODEL` | Memory model id. The provider is pinned to `openrouter` via `PM_PROVIDER`. |
 | `--memory-protocol <p>` | `text` | `PM_PROTOCOL` | `text` or `tools`. |
 | `--memory-interval <n>` | `1` | `PM_EVERY` | Consult every n-th counted step. A counted step is one **model request**, mid-turn steps after a tool result included — a turn whose reply calls three tools is four steps — so `1` means one consult per executor call, not one per user turn. `2` halves the memory bill. |
 | — | — | `PM_POLICY_FILE` | The domain policy the memory model is judged against, rendered into its system prompt. `run_eval.sh` defaults it to `<export dir>/policy.md` for a non-`off` arm — the same directory `tools.json` is exported to. Unset or unreadable means no `<policy>` section, and the prompt then forbids `procedural` entries and policy-violation interventions outright. |
