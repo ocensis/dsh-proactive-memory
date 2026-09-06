@@ -65,7 +65,7 @@ test('the prompt keeps or drops regions per arm', () => {
   assert.ok(full.includes('memory_save_knowledge'))
   assert.ok(!full.includes('<!--'))
   assert.ok(full.includes('At most 6 edits'))
-  assert.ok(full.includes('at most 400 characters'))
+  assert.ok(full.includes('at most 700 characters'))
 
   const nobank = loadPrompt(resolveConfig({ ...base, mode: 'proactive-nobank' }))
   assert.ok(!nobank.includes('PHASE 1'))

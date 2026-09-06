@@ -45,7 +45,7 @@ export const Config = z.object({
     maxEditsPerCall: z.number().default(6),
   }),
   intervention: z.object({
-    maxChars: z.number().default(400),
+    maxChars: z.number().default(700),
     maxPerEpisode: z.number().default(12),
     dedupeJaccard: z.number().default(0.8),
   }),
@@ -93,7 +93,7 @@ export function resolveConfig(raw) {
   cfg.bank.maxKnowledge = clampInt(cfg.bank.maxKnowledge, 0, 200, 12)
   cfg.bank.maxProcedural = clampInt(cfg.bank.maxProcedural, 0, 200, 12)
   cfg.bank.maxEditsPerCall = clampInt(cfg.bank.maxEditsPerCall, 0, 100, 6)
-  cfg.intervention.maxChars = clampInt(cfg.intervention.maxChars, 20, 20000, 400)
+  cfg.intervention.maxChars = clampInt(cfg.intervention.maxChars, 20, 20000, 700)
   cfg.intervention.maxPerEpisode = clampInt(cfg.intervention.maxPerEpisode, 0, 1000, 12)
   cfg.intervention.dedupeJaccard = clampNum(cfg.intervention.dedupeJaccard, 0, 1, 0.8)
   cfg.bankctx.maxChars = clampInt(cfg.bankctx.maxChars, 20, 20000, 1500)

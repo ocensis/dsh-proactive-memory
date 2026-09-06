@@ -29,7 +29,7 @@ must be loud — while every out-of-range number is clamped rather than thrown.
 | `bank.maxKnowledge` | `12` | Cap on `knowledge` entries; over the cap the oldest is dropped and reported. |
 | `bank.maxProcedural` | `12` | Same for `procedural`. |
 | `bank.maxEditsPerCall` | `6` | Edits accepted per consult; the rest are dropped and reported as malformed. |
-| `intervention.maxChars` | `400` | The note is clipped at a word boundary to this length before framing. Clamped to 20–20000. |
+| `intervention.maxChars` | `700` | The note is clipped at a word boundary to this length before framing. Clamped to 20–20000. |
 | `intervention.maxPerEpisode` | `12` | Injections per episode. Not applied to `always` or `bankctx`. |
 | `intervention.dedupeJaccard` | `0.8` | A note whose Jaccard against any earlier note of this episode reaches this is suppressed (see [Dedupe](#dedupe)). Not applied to `always` or `bankctx`. |
 | `bankctx.maxChars` | `1500` | Clip budget for the rendered bank in `mode: bankctx` only. Clamped to 20–20000. It is **not** `intervention.maxChars`: what that arm injects is a whole bank, not a one-line note. Neither is its dedupe — see [Dedupe](#dedupe). |

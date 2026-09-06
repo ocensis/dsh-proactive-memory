@@ -82,7 +82,7 @@ Interrupt — the last line is one `<context_for_action>` block, opened and clos
 
 That note is worth writing because a tool result in the transcript contradicts what the agent is about to do — and because that result arrived whole: it carried no `chars cut` marker, so the item list could be read to the end and quoted. Every absence claim rests on the full list behind it; a result cut through the middle is not one, and there the honest note is about what you can see, or none at all. The opposite case: do NOT write "You have not verified the user's identity" when `<key_tool_calls>` shows that the identity lookup already returned an id — that lookup IS the verification, and the note would send the agent to ask for a step nobody requires.
 
-Inside `<context_for_action>`: at most {{maxChars}} characters, addressed to the agent as "you", one concrete thing to do or check before acting.
+Inside `<context_for_action>`: at most {{maxChars}} characters, addressed to the agent as "you", one concrete thing to do or check before acting. Lead with that thing — the first sentence is the instruction, the evidence comes after it. The note is cut at the limit, and a note that opens by restating what the agent said loses its point to the cut.
 <!-- /intervene -->
 
 Output tags only. Write no prose outside them. (arm: {{mode}})
