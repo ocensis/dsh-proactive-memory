@@ -18,6 +18,7 @@ must be loud — while every out-of-range number is clamped rather than thrown.
 | `model.model` | `''` | Memory model id. |
 | `model.temperature` | `0` | Clamped to 0–2. |
 | `model.maxTokens` | `512` | Clamped to 16–8192. A `max-tokens` finish counts as a failure, not a stop (see below). |
+| `model.reasoningEffort` | `''` | Reasoning effort id forwarded to `ctx.llm.stream` (e.g. `low`). Needed for thinking models such as `z-ai/glm-5.3-flash`, which otherwise spend `maxTokens` on reasoning and hit `max-tokens` on every consult; the provider's model entry must declare the effort levels (`reasoningEfforts`). |
 | `model.timeoutMs` | `20000` | Per-consult deadline, clamped to 500–300000. On timeout the step proceeds unchanged. |
 | `protocol` | `text` | `text` (one round-trip, tag grammar) or `tools` (four real tool schemas). |
 | `schedule.firstStep` | `true` | Consult on the first counted pre-step of the episode — step 1 of turn 1. |

@@ -22,6 +22,7 @@ export const Config = z.object({
     model: z.string().default(''),
     temperature: z.number().default(0),
     maxTokens: z.number().default(512),
+    reasoningEffort: z.string().default('').description('reasoning effort id passed to ctx.llm.stream (e.g. low); empty sends none — a thinking model then thinks at its default and can eat maxTokens'),
     timeoutMs: z.number().default(20000),
   }),
   protocol: z.union(PROTOCOLS).default('text'),

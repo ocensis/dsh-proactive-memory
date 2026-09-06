@@ -152,6 +152,9 @@ async function runConsult(ctx, cfg, state, input, signal, { system, userText, st
     system,
     temperature: cfg.model.temperature,
     maxTokens: cfg.model.maxTokens,
+    // A thinking model (e.g. glm-5.3-flash) spends its output budget on reasoning unless the effort is
+    // pinned; dsh forwards this to the provider's reasoning option only when the model entry declares it.
+    ...(cfg.model.reasoningEffort ? { reasoningEffort: cfg.model.reasoningEffort } : {}),
     sessionId: input.sessionId,
     signal: AbortSignal.any(signals),
   }
